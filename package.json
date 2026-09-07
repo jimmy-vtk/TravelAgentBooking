@@ -1,0 +1,21 @@
+{
+  "name": "travel-agent-booking",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "TakeMeTo trial task - hotel booking agent (Discover / Record / Replay). Built from scratch.",
+  "scripts": {
+    "test": "node --test",
+    "run": "node --env-file=.env src/cli/run.mjs",
+    "worker": "node --env-file=.env src/cli/worker.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "better-sqlite3": "^11.10.0",
+    "patchright": "^1.62.3",
+    "playwright": "^1.55.0"
+  }
+}
