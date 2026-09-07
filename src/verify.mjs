@@ -20,8 +20,22 @@ const CARD_FIELD_WORDS = /card number|kartennummer|credit card|kreditkarte|cvv|c
 
 // Real payment processors this check must still catch even though their iframe is cross-origin from the
 // booking site itself (PCI compliance requires the card form to live on the processor's own origin, not
-// the merchant's).
-const KNOWN_PAYMENT_PROCESSOR_HOSTS = /(^|\.)(stripe\.com|adyen\.com|braintreegateway\.com|braintree-api\.com|checkout\.com|worldpay\.com|paypal\.com|paypalobjects\.com|klarna\.com|squareup\.com|square\.com|authorize\.net|cybersource\.com|payu\.com|razorpay\.com|2checkout\.com|verifone\.com|ingenico\.com|globalpayments\.com|cardinalcommerce\.com)$/i;
+// the merchant's). A fixed list of known hosts can never be complete - there are dozens of regional/
+// PCI-scoped processors in real use - so it's a belt-and-suspenders addition to the URL-pattern heuristic
+// below, not the only line of defense.
+const KNOWN_PAYMENT_PROCESSOR_HOSTS = /(^|\.)(stripe\.com|adyen\.com|braintreegateway\.com|braintree-api\.com|checkout\.com|worldpay\.com|paypal\.com|paypalobjects\.com|klarna\.com|squareup\.com|square\.com|authorize\.net|cybersource\.com|payu\.com|razorpay\.com|2checkout\.com|verifone\.com|ingenico\.com|globalpayments\.com|cardinalcommerce\.com|datatrans\.com)$/i;
+
+// Live-verified 2026-09 on Mari Jean Hotel (Mews): the fixed host list above missed Datatrans entirely (a
+// real, PCI-compliant Swiss processor Mews happens to use) - `isRelevantFrame` excluded its genuine
+// tokenization iframe on every single run, meaning the actual payment page was NEVER once recognized
+// programmatically, only ever self-reported by the model. The mirror image of the Agoda false positive this
+// module was built to fix: an incomplete allowlist produces a false NEGATIVE instead. A URL-content
+// heuristic generalizes past any one list - a genuine card-tokenization iframe's own URL reliably names
+// itself as such ("SecureFields", "TOKENIZE", a "/payment/" path segment - true of both Datatrans's
+// pay.datatrans.com/upp/payment/SecureFields/paymentField and Agoda's own secure.agoda.com/payment/...),
+// while an ad/tracking network's URL (doubleclick, criteo, recaptcha, adsrvr - see the regression test)
+// never coincidentally contains any of these.
+const PAYMENT_URL_HINT = /\/payment\/|securefield|tokeniz/i;
 
 function registrableDomain(hostname) {
   const parts = hostname.split('.');
@@ -32,17 +46,32 @@ function registrableDomain(hostname) {
 // RESULTS page (the page carries many - doubleclick, criteo, recaptcha, etc.) contained a hidden field
 // whose label happened to match CARD_FIELD_WORDS, firing a false "payment page reached" only a few steps
 // into a fresh search. Scope the scan to frames that are actually part of the booking flow: same site as
-// the main page, or a known payment-processor domain (see above, and the cross-origin-iframe comment below
-// for why those must stay included). Everything else - ad networks, captcha widgets, unrelated trackers -
+// the main page, a known payment-processor domain, or a frame whose own URL names itself as a card-
+// tokenization endpoint (see above). Everything else - ad networks, captcha widgets, unrelated trackers -
 // is excluded regardless of its content.
+//
+// Live-verified 2026-09 on Mari Jean Hotel (Mews): the ENTIRE booking widget - dates, room selection,
+// guest details, all of it - lives in a same-page `<iframe>` that was never given a real `src` at all (its
+// content is injected directly, not navigated to). Playwright's own Frame.url() for it reports "about:blank"
+// forever, regardless of what's actually rendered inside - reading `frame.contentWindow.location.href` from
+// page JS shows the real, current URL, but that's not what Playwright's frame-tracking exposes. This is a
+// different failure mode from the try/catch below (that catches a genuinely unparseable string; "about:blank"
+// parses fine, it's just uninformative) and was silently excluding the ENTIRE page's own visible text -
+// including the literal word "Payment" and the booking's own total price - from every check, so the
+// real payment page was never once recognized programmatically. An ad/tracking network is never about:blank -
+// it always navigates to its own real, identifying URL to serve or track anything - so treating an
+// about:blank frame as relevant by default carries none of the false-positive risk this function exists to
+// guard against; it only ever helps a legitimate same-page widget be seen.
 export function isRelevantFrame(frameUrl, mainUrl) {
+  if (frameUrl === 'about:blank' || !frameUrl) return true;
   try {
     const frameHost = new URL(frameUrl).hostname;
     const mainHost = new URL(mainUrl).hostname;
     if (registrableDomain(frameHost) === registrableDomain(mainHost)) return true;
-    return KNOWN_PAYMENT_PROCESSOR_HOSTS.test(frameHost);
+    if (KNOWN_PAYMENT_PROCESSOR_HOSTS.test(frameHost)) return true;
+    return PAYMENT_URL_HINT.test(frameUrl);
   } catch {
-    return true; // unparseable (about:blank, data:, etc.) - can't prove it's irrelevant, so don't skip it
+    return true; // unparseable (data:, etc.) - can't prove it's irrelevant, so don't skip it
   }
 }
 
@@ -77,6 +106,65 @@ export async function hasPaymentInputFields(page) {
       return false; // detached or otherwise unreachable frame - not a match, not a hard error
     }
   };
+  for (const frame of page.frames()) {
+    if (!isRelevantFrame(frame.url(), mainUrl)) continue;
+    if (await checkFrame(frame)) return true;
+  }
+  return false;
+}
+
+// Live-verified 2026-09 on Mari Jean Hotel (Mews): the model filled ONLY "First name", then the automatic
+// payment check fired (Mews puts guest details and the payment section on the SAME page, with no separate
+// "continue" boundary between them) and reported success - because requiredFieldsFilled() below only ever
+// re-checks fields the trace itself claims were filled, and only "First name" had been tagged. Last name/
+// Email/Phone were never attempted at all, sat visibly empty on screen, and were invisible to a check that
+// only knows about what it was told about. A genuinely required field the agent never even tried is just as
+// real a gap as one it tried and failed - this scans for ANY visible, currently-empty input whose own
+// label looks like a standard guest-detail field, independent of what the trace does or doesn't mention.
+const GUEST_FIELD_LABEL_WORDS = /first name|last name|full name|guest name|e-?mail|phone|mobile number/i;
+
+export async function hasEmptyRequiredGuestField(page) {
+  // Live-verified 2026-09 on Mari Jean Hotel (Mews): with EVERY real guest field genuinely and correctly
+  // filled, this still fired - not from a decoy frame (that theory didn't hold up under direct inspection),
+  // but from a "marketing-emails-checkbox" opt-in checkbox in the SAME real form, whose own `name`
+  // attribute contains "emails" as a substring - enough to match the e-?mail pattern below. A checkbox's
+  // `.value` is never a meaningful "is this filled in" signal at all (it's usually a fixed string like "on"
+  // regardless of checked state, or empty), so scanning `input` generically catches it as a false "empty
+  // required field". Scope to genuine TEXT ENTRY controls only - the same isTextEntry distinction
+  // discover.mjs's accessibleName() already draws for exactly this reason.
+  // Also require the SAME frame to have at least one matching field that's genuinely non-empty before
+  // trusting an "empty" finding there - real proof this is the actual guest-details form, not some
+  // unrelated frame that merely happens to contain a coincidentally-matching field.
+  const checkFrame = async (frame) => {
+    try {
+      return await frame.evaluate((pattern) => {
+        const re = new RegExp(pattern, 'i');
+        const visible = (el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        };
+        const isTextEntry = (el) => el.tagName === 'TEXTAREA'
+          || el.getAttribute('role') === 'textbox'
+          || (el.tagName === 'INPUT' && !['submit', 'button', 'checkbox', 'radio', 'reset', 'image', 'hidden', 'file'].includes((el.getAttribute('type') || 'text').toLowerCase()));
+        const labelFor = (el) => [
+          el.getAttribute('aria-label') || '',
+          el.getAttribute('placeholder') || '',
+          el.name || '',
+          el.id ? (document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.innerText || '') : '',
+        ].join(' ');
+        const matching = [...document.querySelectorAll('input, [role=textbox]')]
+          .filter(visible)
+          .filter(isTextEntry)
+          .filter((el) => re.test(labelFor(el)));
+        const hasFilled = matching.some((el) => el.value && el.value.trim());
+        const hasEmpty = matching.some((el) => !el.value || !el.value.trim());
+        return hasFilled && hasEmpty;
+      }, GUEST_FIELD_LABEL_WORDS.source);
+    } catch {
+      return false;
+    }
+  };
+  const mainUrl = page.url();
   for (const frame of page.frames()) {
     if (!isRelevantFrame(frame.url(), mainUrl)) continue;
     if (await checkFrame(frame)) return true;
@@ -132,6 +220,13 @@ export async function requiredFieldsFilled(page, trace) {
       }
       return { ok: false, missingField: step.field };
     }
+  }
+  const emptyGuestField = await hasEmptyRequiredGuestField(page);
+  if (process.env.DEBUG_PAYMENT_CHECK) {
+    console.error(`[requiredFieldsFilled] hasEmptyRequiredGuestField=${emptyGuestField}`);
+  }
+  if (emptyGuestField) {
+    return { ok: false, missingField: null, reason: 'a visible guest-detail field is still empty (never attempted)' };
   }
   return { ok: true };
 }

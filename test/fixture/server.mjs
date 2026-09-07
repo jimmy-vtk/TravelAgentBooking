@@ -65,6 +65,15 @@ const PAGES = {
     <iframe src="http://localhost:__PORT__/ad" width="300" height="150"></iframe>
     <button onclick="location.href='/guest'">Reserve</button>
   </body></html>`,
+
+  // A tiny calendar stand-in: two day cells, each named the way a real site's own date-cell locator would
+  // be (the accessible name literally IS the date) - stands in for Traveloka's "date-cell-1-10-2026" and
+  // Agoda's "Tue Oct 20 2026" patterns without depending on either site's exact markup.
+  '/calendar': `<!doctype html><html><body>
+    <h1>Pick dates</h1>
+    <button aria-label="Oct 15 2026">15</button>
+    <button aria-label="Oct 20 2026">20</button>
+  </body></html>`,
 };
 
 export function startFixture(port = 0) {

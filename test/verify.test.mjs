@@ -46,6 +46,24 @@ test('isRelevantFrame: same site and known payment processors pass, unrelated th
   assert.equal(isRelevantFrame('https://www.google.com/recaptcha/api2/aframe', main), false, 'unrelated captcha widget');
 });
 
+test('REGRESSION (found live 2026-09 on Mari Jean Hotel/Mews): an about:blank frame defaults to relevant, since Playwright reports a same-page injected-content widget this way forever, with no real URL to check', () => {
+  const main = 'https://app.mews.com/distributor/a4197217-ab80-4ad5-b585-b0b90089db3d';
+  assert.equal(isRelevantFrame('about:blank', main), true);
+  assert.equal(isRelevantFrame('', main), true);
+});
+
+test('REGRESSION (found live 2026-09 on Mari Jean Hotel/Mews): an UNLISTED payment processor is still recognized via its own URL, not just the fixed host list', () => {
+  // Datatrans isn't in KNOWN_PAYMENT_PROCESSOR_HOSTS at all - this must pass on the URL-content heuristic
+  // alone. Live, this false negative meant the real payment page was never once recognized programmatically
+  // across every attempt, only ever self-reported by the model - the mirror image of the Agoda false
+  // positive this module exists to fix.
+  const main = 'https://app.mews.com/distributor/a4197217-ab80-4ad5-b585-b0b90089db3d';
+  const datatransUrl = 'https://pay.datatrans.com/upp/payment/SecureFields/paymentField?mode=TOKENIZE&fieldName=cardNumber';
+  assert.equal(isRelevantFrame(datatransUrl, main), true, 'unlisted processor recognized by URL content, not host');
+  // Sanity check: an ad network URL never coincidentally matches the same heuristic.
+  assert.equal(isRelevantFrame('https://insight.adsrvr.org/track/cei?advertiser_id=x', main), false);
+});
+
 test('REGRESSION (found live on Agoda, 2026-09): an unrelated third-party ad iframe must not trip payment detection on its own - live, this fired on the SEARCH RESULTS page, before the booking flow had even started, and caused an auto-saved recording that stopped 8 steps too early', async () => {
   const { server, baseUrl } = await startFixture();
   const browser = await chromium.launch();
@@ -61,6 +79,28 @@ test('REGRESSION (found live on Agoda, 2026-09): an unrelated third-party ad ifr
     assert.equal(looksLikePayment(adText), true, 'sanity check: the ad copy alone is a false-positive trigger, as expected');
 
     assert.equal(await hasPaymentInputFields(page), false, 'the ad iframe is a different site and must be excluded, even though it has a card-shaped input');
+    await browser.close();
+  } finally {
+    server.close();
+  }
+});
+
+test('REGRESSION (found live 2026-09 on Mari Jean Hotel/Mews): a required guest field the agent never even attempted - not just one it tried and failed - must block success', async () => {
+  const { server, baseUrl } = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/guest`);
+
+    // Only "First name" was ever ATTEMPTED - Last name/Email/Phone are absent from the trace entirely
+    // (the model never tried them at all), not merely present-but-empty. The old check had nothing to
+    // re-verify for a field it was never told about, and passed vacuously.
+    const trace = [{ action: 'fill', role: 'textbox', name: 'First name', field: 'firstName' }];
+    await page.getByRole('textbox', { name: 'First name' }).fill('Max');
+
+    const result = await requiredFieldsFilled(page, trace);
+    assert.equal(result.ok, false, 'Last name/Email/Phone are visibly empty and must block success even though nothing in the trace mentions them');
+
     await browser.close();
   } finally {
     server.close();
@@ -112,8 +152,15 @@ test('requiredFieldsFilled: fails when a tracked field is empty, passes once fil
     assert.equal(result.ok, false);
     assert.equal(result.missingField, 'email');
 
-    // fill it -> must pass
+    // fill it, but the fixture's OTHER two guest fields (Last name, Phone) are still empty and were never
+    // tracked in this trace at all - must still fail, on the untracked-empty-field check now.
     await page.getByRole('textbox', { name: 'Email' }).fill('test@example.com');
+    result = await requiredFieldsFilled(page, trace);
+    assert.equal(result.ok, false);
+
+    // fill everything visible on the page -> now it genuinely passes
+    await page.getByRole('textbox', { name: 'Last name' }).fill('Mustermann');
+    await page.getByRole('textbox', { name: 'Phone' }).fill('1700000000');
     result = await requiredFieldsFilled(page, trace);
     assert.equal(result.ok, true);
 

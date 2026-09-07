@@ -33,6 +33,25 @@ import { dismissOverlays } from './discover.mjs';
 
 const MAX_CONSECUTIVE_CLICK_SKIPS = 2;
 
+// A recorded date/room-selection CLICK's own locator name IS the value ("date-cell-1-10-2026", a specific
+// room's display name) - unlike fill/select, there's no generic way to substitute a NEW date/room into that
+// locator string for an arbitrary site's own naming scheme. Recognizing that the requested value has actually
+// CHANGED and treating the step as broken - handing it to Discover to re-solve live, the same partial-resume
+// path already used for real drift - is far more robust than trying to pattern-match/rewrite an unknown site's
+// date-cell naming convention. Only forces a break when the value genuinely differs; unset/unrequested
+// (roomType with no preference) never forces one, matching "room type is a preference, not a hard filter."
+function valueChanged(step, params) {
+  if (!step.field || !step.text) return false;
+  if (step.field === 'checkIn' || step.field === 'checkOut') {
+    return Boolean(params[step.field]) && params[step.field] !== step.text;
+  }
+  if (step.field === 'roomType') {
+    if (!params.roomType) return false;
+    return String(params.roomType).trim().toLowerCase() !== step.text.trim().toLowerCase();
+  }
+  return false;
+}
+
 async function tryStep(page, step, params) {
   try {
     const loc = page.getByRole(step.role, { name: step.name, exact: false }).first();
@@ -79,6 +98,12 @@ export async function replay(page, recording, params) {
       await page.mouse.wheel(0, step.direction === 'up' ? -400 : 400);
       i++;
       continue;
+    }
+
+    if (step.action === 'click' && valueChanged(step, params)) {
+      // The requested date/room differs from what was recorded - this exact click would set the WRONG
+      // value if replayed verbatim (its locator name literally IS the old value). Don't even attempt it.
+      return { broken: true, brokenAtStep: i, page };
     }
 
     if (!step.role || !step.name) {

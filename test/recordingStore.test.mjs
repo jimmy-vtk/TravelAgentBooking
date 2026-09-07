@@ -61,3 +61,22 @@ test('recordingStore: saveRecording drops a fill/select step that targets a non-
   assert.equal(saved[0].name, 'Close');
   assert.equal(saved[1].role, 'textbox');
 });
+
+test('REGRESSION (found live 2026-09 on Mari Jean Hotel/Mews): a fill step with NO role recorded at all (a pixel fallback) must be KEPT, not treated the same as a wrong-role mis-click', () => {
+  // The saved recording ended up with zero fill steps whatsoever because every pixel-fallback fill (role:
+  // null - an interstitial disrupted ref-matching, real evidence the agent typed something, exactly what
+  // verify.mjs's requiredFieldsFilled() documents trusting) was being dropped identically to a genuine
+  // wrong-role mis-click. Missing is not the same as wrong.
+  const steps = [
+    { action: 'fill', role: null, name: null, x: 400, y: 300, field: 'firstName', text: 'Max' },
+    { action: 'fill', role: null, name: null, x: 400, y: 340, field: 'lastName', text: 'Mustermann' },
+    { action: 'click', role: 'button', name: 'Continue', field: null },
+  ];
+  saveRecording('Mari Jean Hotel', 'Own website (Mews)', steps);
+
+  const saved = getRecording('Mari Jean Hotel', 'Own website (Mews)');
+  assert.equal(saved.length, 3);
+  assert.equal(saved[0].field, 'firstName');
+  assert.equal(saved[0].text, 'Max');
+  assert.equal(saved[1].field, 'lastName');
+});

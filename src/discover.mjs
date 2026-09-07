@@ -30,6 +30,7 @@ list of interactive elements currently on the page (role, accessible name, and c
 
 Reply with EXACTLY one JSON action per turn - no prose, no markdown fences, nothing but the JSON object:
 {"action":"click","ref":<element number>,"reason":"..."}
+{"action":"click","ref":<element number>,"field":"checkIn"|"checkOut"|"roomType","text":"<see the two rules below>","reason":"..."}   // ONLY for a calendar day-cell click or a room-selection click - see rules
 {"action":"fill","ref":<element number>,"text":"<value>","field":"hotelName"|"checkIn"|"checkOut"|"roomType"|"guests"|"firstName"|"lastName"|"email"|"phone"|"title"|null,"reason":"..."}
 {"action":"select","ref":<element number>,"text":"<visible option text to pick>","field":"...","reason":"..."}   // for a dropdown/combobox element (role "combobox") - NEVER use "fill" on one of these, always "select"
 {"action":"click","x":<px>,"y":<px>,"reason":"..."}   // pixel fallback - ONLY for a target with no element number
@@ -44,6 +45,15 @@ RULES:
 - When filling a value that comes from the booking goal (hotel name, dates, room type, guest name/email/phone),
   set "field" to which one it is - this is what makes the action reusable as a recording later. A field that's
   NOT one of those (a promo code, a special request) gets "field": null.
+- A calendar day-cell CLICK that sets the check-in or check-out date must ALSO be tagged: set "field" to
+  "checkIn" or "checkOut" (whichever you're setting) and "text" to that exact date in YYYY-MM-DD format (not
+  the calendar's own display text). A recording's date step is otherwise just a click on today's specific day
+  cell, with no way to tell a future run with different dates that this step needs re-solving rather than
+  reused verbatim - this tag is what makes that possible.
+- The CLICK that actually selects a specific room (the "Book"/"Reserve"/"Select room" button on one card/row in
+  the room list - NOT a "Rooms" nav tab, NOT a details-modal open) must ALSO be tagged: set "field" to
+  "roomType" and "text" to that room's own displayed name exactly as shown. Same reason - a future run asking
+  for a different room type needs to know to re-pick here instead of reusing today's choice.
 - Dismiss a cookie/consent banner or a "continue as guest" prompt first, only if one is actually visible.
 - Search box with an autocomplete dropdown: after filling, press ArrowDown then Enter, or click the matching
   suggestion directly if it's in the numbered list.
@@ -124,8 +134,10 @@ export async function dismissOverlays(page) {
   }
 }
 
-async function getInteractiveElements(page) {
-  return page.evaluate(() => {
+// Runs entirely INSIDE one frame's own document (main page or a nested iframe) - see the frame-traversal
+// wrapper below for why this had to become a per-frame function instead of a single page.evaluate() call.
+async function getFrameElements(frame, startRef) {
+  return frame.evaluate((startRef) => {
     function accessibleName(el) {
       const aria = el.getAttribute('aria-label');
       if (aria) return aria.trim();
@@ -219,10 +231,10 @@ async function getInteractiveElements(page) {
       return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && inViewport;
     };
     const out = [];
-    let i = 0;
+    let i = startRef;
     for (const el of candidates) {
       if (!visible(el)) continue;
-      if (i >= 60) break;
+      if (i - startRef >= 60) break;
       el.setAttribute('data-agent-ref', String(i));
       out.push({
         ref: i,
@@ -233,7 +245,33 @@ async function getInteractiveElements(page) {
       i++;
     }
     return out;
-  });
+  }, startRef);
+}
+
+// Booking widgets are commonly embedded as a same-page <iframe> (a full booking-engine SPA, not just a
+// PCI-scoped card form) - live-verified 2026-09 on Mari Jean Hotel (Mews-powered): the outer page has
+// LITERALLY ZERO buttons/inputs of its own; the entire flow - dates, room selection, guest details,
+// everything - lives inside `<iframe class="mews-distributor">`. page.evaluate() only ever runs in the
+// main frame by design, so every single interaction on that whole site was falling through to a raw pixel
+// click, the exact thing this numbered-element system exists to avoid - unreliable, and permanently
+// unreplayable (replay.mjs hard-breaks on any step with no role/name, which pixel-only steps always are).
+// page.frames() reaches every frame regardless of origin (CDP-driven, not in-page JS), same as the payment-
+// detection checks in verify.mjs already rely on. Each element remembers which Frame it came from so
+// executeAction() can build its locator against the RIGHT frame - page.locator() alone never pierces an
+// iframe boundary, even same-origin.
+export async function getInteractiveElements(page) {
+  const out = [];
+  for (const frame of page.frames()) {
+    if (out.length >= 60) break;
+    let elements;
+    try {
+      elements = await getFrameElements(frame, out.length);
+    } catch {
+      continue; // detached, cross-origin-blocked, or mid-navigation - skip this frame, not fatal
+    }
+    for (const el of elements) out.push({ ...el, frame });
+  }
+  return out;
 }
 
 function renderElementList(elements) {
@@ -250,7 +288,12 @@ async function askModel({ goal, elements, screenshotB64, history, usage, lastErr
 
   const msg = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 600,
+    // Bumped from 600 - live-verified 2026-09 re-solving a Traveloka date change: the model got visibly
+    // uncertain after a calendar click didn't obviously register (no clear visual diff), wrote a longer
+    // "reason" while reasoning about it, and got cut off mid-JSON twice in a row at the exact same step -
+    // "unparseable model output (no JSON object found)". More headroom costs a little on the rare turns
+    // that use it and fixes truncation outright the rest of the time.
+    max_tokens: 1024,
     system: `${SYSTEM_PROMPT}\n\nGOAL:\n${goal}`,
     messages: [{
       role: 'user',
@@ -306,7 +349,7 @@ async function humanPause() {
   await new Promise((resolve) => setTimeout(resolve, 400 + Math.random() * 700));
 }
 
-async function executeAction(page, action, elements) {
+export async function executeAction(page, action, elements) {
   const target = elements.find((e) => e.ref === action.ref);
   if (action.action === 'click') {
     await humanPause();
@@ -317,17 +360,17 @@ async function executeAction(page, action, elements) {
       // Playwright's purpose-built method for exactly this state change (rather than a generic click at the
       // element's center) and is worth trying first; fall back to a plain click if it's not a real
       // checkable input (e.g. a div styled to look like a radio).
-      const loc = page.locator(`[data-agent-ref="${action.ref}"]`).first();
+      const loc = target.frame.locator(`[data-agent-ref="${action.ref}"]`).first();
       await loc.check({ timeout: 5000 }).catch(() => loc.click({ timeout: 5000 }).catch(() => {}));
     } else if (target) {
-      await page.locator(`[data-agent-ref="${action.ref}"]`).first().click({ timeout: 5000 }).catch(() => {});
+      await target.frame.locator(`[data-agent-ref="${action.ref}"]`).first().click({ timeout: 5000 }).catch(() => {});
     } else if (action.x != null) {
       await page.mouse.click(action.x, action.y);
     }
   } else if (action.action === 'fill') {
     if (target) {
       await humanPause();
-      const loc = page.locator(`[data-agent-ref="${action.ref}"]`).first();
+      const loc = target.frame.locator(`[data-agent-ref="${action.ref}"]`).first();
       try {
         // .fill() sets the value AND fires the input/change events a React-controlled field expects,
         // atomically - a manual click+select-all+type sequence (the previous approach) proved unreliable
@@ -340,6 +383,33 @@ async function executeAction(page, action, elements) {
         await page.keyboard.press('Control+A').catch(() => {});
         await page.keyboard.type(action.text || '');
       }
+      // A live-masked input (a phone field that reformats digits as you type) can silently DROP leading
+      // characters when set atomically by .fill() - live-verified 2026-09 on Mari Jean Hotel (Mews):
+      // filling "5205550100" in one shot reproducibly read back as "05550100", losing exactly the leading
+      // "52" - a fast, all-at-once value-set outrunning the field's own reformat-as-you-type logic.
+      // Confirmed directly (not just inferred): typing the exact same digits with a real ~1s per-key pace
+      // read back correctly as "520 555 0100"; Playwright's own default .type() pacing was already too
+      // fast for this specific field. Detect the mismatch and retry with genuinely slow, incremental
+      // per-character typing - deliberately well past what's actually needed, since this only runs once
+      // as a fallback and reliability matters far more than the couple of extra seconds it costs.
+      if (action.text && /phone|mobile|tel\b/i.test(target.name || '')) {
+        // Strip non-digits from BOTH sides before comparing - live-verified 2026-09 the settled value
+        // itself comes back auto-formatted with spaces ("520 555 0100"), which would break a raw
+        // contiguous-substring match against the unformatted digits even when the fill is actually correct.
+        // Compare the FULL digit string, not just a suffix - the actual bug drops LEADING characters
+        // ("5205550100" -> "05550100"), which still contains any suffix of the original completely intact,
+        // so checking only the last few digits would never catch this exact failure mode at all.
+        const settledDigits = (await loc.inputValue({ timeout: 2000 }).catch(() => '')).replace(/\D/g, '');
+        if (!settledDigits.includes(String(action.text).replace(/\D/g, ''))) {
+          await loc.click({ timeout: 5000 }).catch(() => {});
+          await page.keyboard.press('Control+A').catch(() => {});
+          await page.keyboard.press('Backspace').catch(() => {});
+          for (const ch of String(action.text)) {
+            await page.keyboard.type(ch);
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+        }
+      }
     } else if (action.x != null) {
       await page.mouse.click(action.x, action.y);
       await page.keyboard.type(action.text || '');
@@ -347,7 +417,7 @@ async function executeAction(page, action, elements) {
   } else if (action.action === 'select') {
     if (target) {
       await humanPause();
-      const loc = page.locator(`[data-agent-ref="${action.ref}"]`).first();
+      const loc = target.frame.locator(`[data-agent-ref="${action.ref}"]`).first();
       const needle = (action.text || '').trim().toLowerCase();
       // selectOption() sets the value via JS injection and its input/change events are NOT isTrusted -
       // live-verified 2026-09 on Halalbooking: selectOption() on the Anrede (title) field returns success
@@ -471,6 +541,9 @@ export async function discover(page0, { goal, maxSteps = 25, onStep } = {}) {
     let paymentInputsPresent = await hasPaymentInputFields(page).catch(() => false);
     if (process.env.DEBUG_PAYMENT_CHECK) {
       console.error(`[payment-check] step=${step} looksLikePayment=${looksLikePayment(allFramesText)} paymentInputsPresent=${paymentInputsPresent} frames=${page.frames().map((f) => f.url()).join(' | ')}`);
+      console.error(`[payment-check] allFramesText.length=${allFramesText.length} sample=${JSON.stringify(allFramesText.slice(-300))}`);
+      const relevantUrls = page.frames().filter((f) => isRelevantFrame(f.url(), mainUrl)).map((f) => f.url());
+      console.error(`[payment-check] relevantFrameUrls=${JSON.stringify(relevantUrls)}`);
     }
     if (looksLikePayment(allFramesText) && !paymentInputsPresent) {
       for (let i = 0; i < 3 && !paymentInputsPresent; i++) {
@@ -512,7 +585,10 @@ export async function discover(page0, { goal, maxSteps = 25, onStep } = {}) {
       name: target ? target.name : null,
       x: target ? null : (action.x ?? null),
       y: target ? null : (action.y ?? null),
-      text: (action.action === 'fill' || action.action === 'select') ? action.text : undefined,
+      // A click tagged with a field (checkIn/checkOut/roomType - see SYSTEM_PROMPT) carries its own "text"
+      // too, same as fill/select: that's what lets replay tell a stale date/room-choice click apart from one
+      // that still matches what THIS run actually needs, instead of blindly replaying today's date forever.
+      text: (action.action === 'fill' || action.action === 'select' || (action.action === 'click' && action.field)) ? action.text : undefined,
       field: action.field ?? null,
       key: action.key,
       direction: action.direction,

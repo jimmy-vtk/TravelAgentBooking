@@ -55,12 +55,21 @@ function dedupeConsecutive(steps) {
 // was `fill [button "Sign in"] = "Max"`, a genuine mistake the model corrected two steps later by closing
 // a sign-in modal and filling the real field - yet replaying that fill against a button element throws
 // immediately (Playwright's .fill() requires an editable element), hard-breaking replay right there. A
-// `fill`/`select` step targeting a non-editable role is never legitimate regardless of how it got there;
-// drop it outright rather than merely deduping it.
+// `fill`/`select` step targeting a KNOWN, confirmed-wrong role is never legitimate regardless of how it
+// got there; drop it outright rather than merely deduping it.
+//
+// BUG, found live 2026-09 on Mari Jean Hotel/Mews: this used to drop EVERY fill/select step with no role
+// at all (a pixel-coordinate fallback - an interstitial disrupted ref-matching, the same scenario verify.mjs's
+// requiredFieldsFilled() explicitly documents TRUSTING rather than discarding, since it's still real evidence
+// the agent typed something). The saved recording ended up with zero fill steps whatsoever, even though the
+// live run's own success check legitimately saw real values in the DOM at the time - `EDITABLE_ROLES.has(null)`
+// is false, so "no role recorded" and "recorded the WRONG role" were being treated identically. Only the
+// latter is actually invalid; a missing role is unknown, not wrong, and must be kept.
 const EDITABLE_ROLES = new Set(['textbox', 'combobox', 'searchbox', 'spinbutton']);
 function dropInvalidFillTargets(steps) {
   return steps.filter((step) => {
     if (step.action !== 'fill' && step.action !== 'select') return true;
+    if (!step.role) return true; // pixel-fallback - no role recorded at all, not a wrong one
     return EDITABLE_ROLES.has(step.role);
   });
 }

@@ -2,6 +2,95 @@
 
 Hotel booking agent built for TakeMeTo's trial task. Discover a provider's booking flow live once, record it, replay it deterministically after — right up to (not through) payment.
 
+See `APPROACH.md` for the higher-level summary (tech stack, data-flow diagram, a worked demo case, known limitations). This document covers setup/run instructions plus the full design rationale and live-verified fixes.
+
+---
+
+## Setup (fresh machine)
+
+Written assuming nothing is installed yet.
+
+**1. Prerequisites**
+
+- **Node.js 22 or later** — [nodejs.org](https://nodejs.org/). Check with `node --version`.
+- **Google Chrome** (the real browser, not just any Chromium) — [google.com/chrome](https://www.google.com/chrome/). The agent drives your actual installed Chrome (`channel: 'chrome'` in Playwright), not a bundled copy, because live testing found that real sites' bot-detection treats the bundled open-source Chromium differently from real Chrome. Install it normally if it isn't already on the machine.
+- **git**, to clone the repo.
+- An **Anthropic API key** with available credit — [console.anthropic.com](https://console.anthropic.com/). Every live booking run costs real API usage (roughly $0.25–$1.10 per cold run — see `APPROACH.md` §4).
+- (Windows only, occasionally) if `npm install` fails while building `better-sqlite3` from source rather than using a prebuilt binary, install the "Desktop development with C++" workload via [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and Python 3, then re-run `npm install`. Most machines never hit this — `better-sqlite3` ships prebuilt binaries for common platforms.
+
+**2. Clone and install**
+
+```bash
+git clone <this-repo-url>
+cd TravelAgentBooking
+npm install
+```
+
+**3. Configure your API key**
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and set:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+(Leave `ANTHROPIC_WORKSPACE_ID` blank unless your key is an org/SSO-issued "identity-linked" key rather than a plain Console key.)
+
+**4. Verify the install — run the test suite (no API key needed, no network)**
+
+```bash
+npm test
+```
+
+All tests should pass in well under a minute; this only exercises a local fixture server, never a live site or the Anthropic API.
+
+**5. Run a real booking**
+
+Edit `providers.json` (or point `--providers` at your own copy) to the provider(s) you want to try, in the shape:
+
+```json
+[
+  { "name": "Agoda", "homepage": "https://www.agoda.com", "pricePerNight": 6367096 }
+]
+```
+
+Then:
+
+```bash
+npm run run -- --hotel "Sofitel Mumbai BKC" --checkin 2026-10-15 --checkout 2026-10-18 --guests 2 --providers providers.json
+```
+
+A real, headed Chrome window opens and drives the actual booking flow. On success, a proof screenshot lands in `proof/` and a reusable recording in `recordings/`; either way the JSON result prints to stdout. Add `--roomtype "..."` for a room-type preference, or `--verbose` to see every step as it happens.
+
+Useful environment variables (set inline, e.g. `MAX_STEPS=40 npm run run -- ...`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HEADLESS` | unset (headed) | Set to `1` only on a machine with no display — headed is what's proven to work against real anti-bot checks |
+| `MAX_STEPS` | `25` | Raise this for a site that needs more steps than budgeted (many popups, a multi-step calendar) |
+| `ABS_PROFILE_DIR` | `.abs-profile` | The persistent Chrome profile directory — reused across runs so cookies/history accumulate like a real returning visitor |
+| `DEBUG_PAYMENT_CHECK` | unset | Set to `1` to print the payment-detection check's reasoning to stderr on every step |
+| `DEBUG_SHOTS` | unset | Set to a directory path to save a screenshot every step (not just the final proof) |
+| `COST_LOG_PATH` | `cost-log.jsonl` | Where per-attempt cost/runtime entries are appended |
+| `RECORDINGS_DIR` | `recordings` | Where saved recordings live |
+| `JOB_DB_PATH` | `jobs.sqlite` | Local SQLite file backing the job store (see below) |
+
+**6. Run the job-store worker** (the queue-pattern entry point, instead of the direct CLI above)
+
+```bash
+node --input-type=module -e "
+import { insertJob } from './src/jobStore.mjs';
+insertJob({ id: 'demo-1', hotel_name: 'Sofitel Mumbai BKC', check_in: '2026-10-15', check_out: '2026-10-18', guests: 2, providers: [{ name: 'Agoda', homepage: 'https://www.agoda.com', pricePerNight: 6367096 }] });
+"
+npm run worker -- --job-id demo-1
+```
+
+This reads the job row, calls `bookHotel(...)`, and writes `status`/`error`/`proof_url` back onto the same row — the local stand-in for TakeMeTo's real `booking_jobs` table (see `APPROACH.md` for the swap-to-Postgres plan).
+
 ---
 
 # Approach
@@ -101,11 +190,11 @@ Reaching a page that *looks* like payment is necessary but not sufficient. The e
 What actually ships at the end of the week — each item mapped to the evaluation criterion in section 07 it exists to satisfy, not included for its own sake.
 
 - **The repo.** `bookHotel(...)` (Discover / Record / Replay / verify), the job-store worker with its swappable SQLite/Postgres interface, and a runnable fixture-based test suite (`npm test`). → *"code quality."*
-- **Three successful runs, one per category** (major OTA, smaller/newer OTA, hotel's own site). Each comes with: the final payment-page proof screenshot, a screenshot per recorded state change (search → room selected → guest details → payment), and the saved recording/trace that run produced. → *"coverage across all three categories"* + *"provability."*
-- **The repeatable-algorithm proof.** On at least one category, the same hotel's recording replayed with a different stay period and a different room type, with its own screenshot and trace showing whether Replay succeeded directly or Discover resumed partway through and the recording updated. Scoped per (hotel, site), per the client's clarification — not a cross-hotel test. → *"what today is worked out half-manually should turn into an algorithm... only the dates, room type and guest count still vary."*
+- **Three successful runs, one per category** (major OTA, smaller/newer OTA, hotel's own site). Each comes with: the final payment-page proof screenshot and the saved recording/trace that run produced. A screenshot per recorded state change (search → room selected → guest details → payment) is supported (`DEBUG_SHOTS`) but wasn't turned on for these particular final runs — the recording's own step-by-step trace is what actually stands in as the checkable "how it got there" artifact for these three. → *"coverage across all three categories"* + *"provability."*
+- **The repeatable-algorithm proof.** The substitution mechanism (recognize a changed date/room type on a recorded `click` step, hand off to Discover exactly there rather than reusing the old value) is implemented and live-verified on Traveloka: replay correctly detects the change and resumes at the right step across 3/3 attempts. Full completion to payment with genuinely different dates wasn't reached live in those 3 attempts, for a reason unrelated to the mechanism itself (see "Changed dates/room type" below) — the same-dates replay-then-resume case (Tier-2 item 4's first half) remains the one full live proof of Replay/Discover splicing end to end. Scoped per (hotel, site), per the client's clarification — not a cross-hotel test. → *"what today is worked out half-manually should turn into an algorithm... only the dates, room type and guest count still vary."*
 - **A written, conceptual answer on cross-hotel reuse** — not implemented, but reasoned through: which steps already generalize for free (search, guest details, payment) and which one doesn't (room selection), with two concrete paths forward. → the client's explicit ask for "a conceptual section... to understand the path forward."
-- **The Booking.com/Expedia attempt, if time allows.** Whatever the outcome, documented — including *why* if it fails. → the client's explicit interest in this even as a negative result.
-- **A fallback-in-action example.** Reproducible on demand via the fixture test suite (a mocked top-provider failure correctly falls through to the next-cheapest); any live case that occurs naturally during the real runs is kept as a bonus, not required. → *"failures automatically trigger the next-cheapest provider... instead of giving up on the job right away."*
+- **The Booking.com/Expedia attempt, if time allows.** Never actually attempted this week — explicitly the first thing to cut if time runs tight, and it did. → the client's explicit interest in this even as a negative result; the negative result here is simply "not reached," not a failed attempt.
+- **A fallback-in-action example.** The provider-fallback loop in `bookHotel.mjs` is straightforward and correct by inspection (try providers in order, move to the next on any failure), and every multi-provider live run has exercised it implicitly — but there's no dedicated fixture test isolating it, and no live run specifically engineered to fail its first provider on purpose. Tracked as an honest gap rather than claimed as done. → *"failures automatically trigger the next-cheapest provider... instead of giving up on the job right away."*
 - **An honest failure log.** Any hotel/provider combination that ends in `needs_review`, with its reason recorded rather than silently dropped or papered over. → *"whether a small, honestly-named remainder of cases gets handed to a human instead of being papered over."*
 - **A cost/runtime report** — token cost and wall-clock time per `Discover` run, informational, not scored.
 - **This document**, standing as both the drift-detection answer (section 06) and the "one-off success turned into a repeatable algorithm" write-up section 02 asks to see, not just claim.
@@ -122,16 +211,18 @@ Two tiers, because this system's hard failure mode is real-site drift — testin
 
 A local fixture page (a tiny static HTML form under our control, not a real OTA) stands in for "a provider." This tier never calls a live site and never calls the model for anything except the pieces that genuinely need it — most of it is testing the *logic*, not the agent.
 
+This list is kept honest against what `test/*.test.mjs` actually contains (26 tests, last audited 2026-09) — an earlier pass of this document listed several tests that were only ever planned, not written; every bullet below is real and passing under `npm test`.
+
 - `verify()` (payment-page detection): feed it sample page text — positive cases (real payment-page wording + price) and negative cases (a results page, a cart page, an unrelated page with a stray "€" in it) — confirm it only fires on the real thing.
 - Field-fill verification: fixture where the page text matches payment wording but a required guest field (e.g. email) is left empty → success check must fail. Fill it → must pass. This is the difference between "page reached" and "actually done."
-- Replay executor against the fixture: a recording with a step whose element exists → step succeeds. A recording with a step whose element has been removed (simulate drift by editing the fixture) → executor reports `broken` at that exact step index, does not throw, does not silently skip.
-- Partial-replay splicing: a recording with steps 1-12, simulate a break at step 7 (remove that element from the fixture) → confirm the resumed Discover run only re-does steps 7 onward (not 1-6), and the saved recording afterward is exactly `[old 1-6] + [new 7-N]`, not a full fresh recording.
-- Record: run one full Discover pass against the fixture, confirm the resulting recording is well-formed (each step has an action, a locator, and a `field` tag where it fills something) and that replaying it immediately reproduces the same outcome.
-- Record reuse across parameters: replay the same fixture recording with a different date range and room type value → confirm those fields update correctly and the run still succeeds (this is the (hotel, site)-scoped reuse the client asked for, tested at the fixture level before trusting it live).
-- Fallback loop: mock two providers, first one always fails → confirm the second one is tried and its result is what gets returned.
-- Guardrail check: fixture includes a fake "Pay now" button past the checkout page → confirm the agent stops *before* it and never clicks it, under a prompt that tries to nudge it forward.
+- Replay executor against the fixture: a recording with a step whose element exists → step succeeds. A recording with a step whose element has been removed (simulate drift by editing the fixture) → executor reports `broken` at that exact step index, does not throw, does not silently skip. A step with no role/name at all (a pixel fallback) is always treated as broken too.
+- Record reuse across parameters (dates/room type): a recording with a date-cell or room-selection `click` step tagged `field`/`text` (see "Changed dates/room type" below) replays fine when the requested value matches what was recorded, is recognized as broken *before even attempting the click* when the value has genuinely changed (so a stale date is never blindly re-clicked), and is left alone when no preference was requested at all (room type is "a preference, not a hard filter").
 - Cross-origin frame scoping (`isRelevantFrame`): unit cases for same-site, a known payment-processor subdomain, and unrelated ad/captcha networks. Plus a fixture reproducing the live Agoda bug directly — a page embedding a genuinely cross-origin iframe whose own text and input satisfy the full payment-detection signal entirely on its own — confirming `hasPaymentInputFields` excludes it while still catching the real, same-site payment iframe.
-- Worker round-trip against the local SQLite store: insert a row matching the section-03 schema, run the worker, confirm it reads the right fields, calls `bookHotel(...)` with them (mocked), and writes `status`/`error`/`proof_url` back onto the same row correctly for both a success and a failure outcome.
+- `recordingStore`: round-trips scoped per (hotel, provider); collapses consecutive duplicate steps down to the last attempt; drops a `fill`/`select` step that targets a non-editable role (a stray mis-click that would otherwise hard-break a later replay).
+- `jobStore`: round-trip matches the section-03 schema fields exactly; `writeJobResult` updates `status`/`error`/`proof_url` on the same row for both a success and a failure outcome.
+- `costLog`: one JSON line per attempt with a real timestamp and a rounded cost; running totals sum and filter correctly by hotel/provider.
+
+**Known, honestly-tracked gaps in Tier 1** (not yet written, none of them blocking): a fixture-level test of `bookHotel`'s own provider-fallback loop (mock two providers, first fails, confirm the second is tried) — the loop is simple and correct by inspection, and live runs have exercised multi-provider lists, but no automated test pins it down; a guardrail-fixture test (a fake "Pay now" button, confirm the agent never clicks it) — the guardrail is enforced entirely in the model prompt, which isn't something Tier 1's no-network design can exercise without a real or mocked model call; a test of `src/cli/worker.mjs` itself (as opposed to the `jobStore.mjs` functions it calls) — nothing currently exercises the actual `getJob → bookHotel → writeJobResult` wiring end to end.
 
 ### Tier 2 — live smoke tests (run manually, before each proof submission — not on every commit)
 
@@ -140,8 +231,10 @@ Real sites drift on their own schedule; these confirm the actual deliverable, no
 1. **Major OTA — cold Discover.** ~~Trip.com~~ **Agoda** (swapped live 2026-09: Trip.com's own naturally-searched flow needed more steps than budgeted and was deprioritized in favor of a provider that reached payment cleanly within budget). A hotel from the example list, fresh run, no existing recording, natural on-site search (no deep link). Reached payment, every guest-detail field actually filled — **done**, $0.46, proof screenshot on file. This one run is sufficient for the major-OTA category on its own. (An earlier attempt on this same hotel had first *reported* success after only 9 steps and $0.22 — a false-positive payment detection, caught by checking the proof screenshot against what the model actually claimed rather than trusting the claim. See "Agoda-specific fixes" below; this result is the re-run after that bug was found and fixed, confirmed against the genuine "Payment information" page.)
 2. **Major OTA — replay, same hotel, changed stay period + room type.** Attempted against Agoda. The current recording's first 5 of 9 steps (SEARCH click through room selection) replayed with **zero model calls** — every step in the current recording has a real `(role, name)` locator, the direct result of the date-picker prompt fix below removing the one pixel-only step a fresh capture used to produce. It broke on a checkout-flow interstitial that isn't consistently present run-to-run; Discover's resume from that break did not reach payment on this particular attempt (ended `stuck`, $0.26 for the resumed portion) — logged as an open item below rather than re-run repeatedly at further cost. The live, successful repeatable-algorithm proof for this deliverable item remains item 4's Traveloka case.
 3. **Smaller/newer OTA — cold Discover.** ~~Halalbooking~~ **Traveloka** (swapped live 2026-09: Halalbooking, Tiket.com, and Cleartrip were each tried first and ruled out live - Halalbooking/Tiket.com showed the identical-looking-session "real Chrome succeeds, Playwright fails" automation-fingerprint gap described under Guardrails/Drift below; Cleartrip hard-requires a real, checksum-validated Indian PAN number, incompatible with this project's fictional-data-only guardrail). Four Points by Sheraton Bali, Seminyak, fresh run. Reached payment, fields filled — **done**, $0.54-0.90 per cold run depending on path taken, proof screenshot on file.
-4. **Smaller/newer OTA — replay, changed stay period + room type.** **Done, live-verified 2026-09.** Re-ran the saved (hotel, Traveloka) recording for the same hotel/dates against a fresh session. Replay executed the first **8 steps with zero model calls** — hotel-name search, autocomplete-suggestion selection, both check-in/check-out date-cell selections, and navigation into the room list, all matched purely by (role, name) — before breaking at a genuinely non-deterministic login-prompt interstitial that doesn't appear identically on every visit. Discover resumed from exactly that point (no restart, known-good prefix kept) and reached payment. Total run cost **$0.34**, versus $0.81-0.90 for a cold Discover run on the same hotel — a real, measured cost reduction from the deterministic prefix, not just a claimed one. See "Traveloka-specific fixes" below for the two code changes that made the search/date-picking portion replayable at all.
-5. **Hotel's own site — cold Discover.** ~~Cloudbeds-based hotel~~ **Mari Jean Hotel (Mews-powered)** — St. Petersburg, FL, `marijeanhotel.com`, one of the trial spec's own listed "hotel's own booking site" examples. A Cloudbeds-based attempt (Hotel McCoy, Tucson) was also live-tested and is documented as an unresolved case below rather than silently dropped. Reached payment, fields filled — **done**, $0.87, proof screenshot on file.
+4. **Smaller/newer OTA — replay, changed stay period + room type.** Two distinct things were actually tested here, and it's worth being precise about which is which:
+   - **Same-dates replay-then-resume: done, live-verified 2026-09.** Re-ran the saved (hotel, Traveloka) recording for the *same* hotel/dates against a fresh session. Replay executed the first **8 steps with zero model calls** — hotel-name search, autocomplete-suggestion selection, both check-in/check-out date-cell selections, and navigation into the room list, all matched purely by (role, name) — before breaking at a genuinely non-deterministic login-prompt interstitial that doesn't appear identically on every visit. Discover resumed from exactly that point and reached payment. Total run cost **$0.34**, versus $0.67-0.90 for a cold Discover run on the same hotel. See "Traveloka-specific fixes" below.
+   - **Genuinely changed dates + room type: mechanism verified, full completion not yet reached live.** After finding (auditing against the trial-task spec, 2026-09) that no recording actually tagged `checkIn`/`checkOut`/`roomType` as substitutable at all — see "Changed dates/room type" below — those steps were re-captured with the fix in place, then replayed against genuinely different dates (Nov 5-8 instead of the recorded Oct 15-18) and a different room type. Across 3 live attempts, replay correctly recognized the date mismatch and handed off to Discover at exactly the right step (`resumedFromStep: 1`) every single time, never once attempting the stale Oct-15 click — and Discover's resume did correctly click "Nov 5, 2026" as the new check-in date on its very first attempt at it. None of the 3 attempts reached payment, though: the site's own 2-month calendar widget (requiring an extra "advance to next month" step the recorded flow never needed) repeatedly tripped the model into re-clicking a date it had already set and eventually producing malformed output a step or two later. This is a separate, real gap in multi-month calendar navigation - not a flaw in the substitution mechanism itself, and not something the spec actually requires (it only asks for "a different stay period," not one that crosses into a month the calendar isn't already showing). Not pursued further at additional live cost past 3 attempts (~$0.86); a same-month date change was never tried and would very plausibly complete cleanly, since it wouldn't touch the calendar-navigation issue at all.
+5. **Hotel's own site — cold Discover.** ~~Cloudbeds-based hotel~~ **Mari Jean Hotel (Mews-powered)** — St. Petersburg, FL, `marijeanhotel.com`, one of the trial spec's own listed "hotel's own booking site" examples. A Cloudbeds-based attempt (Hotel McCoy, Tucson) was also live-tested and is documented as an unresolved case below rather than silently dropped. Reached the genuine payment page, every guest field non-empty — **done**, $0.49 for the final confirmed run, proof screenshot on file. See "Mews-specific fixes" below for the real chain of bugs this uncovered and one honestly-flagged remaining gap in the proof itself (a phone-format validation error visible on the final screenshot that the automatic check doesn't catch, since it only checks for empty fields, not the site's own format validation).
 6. **Partial-replay resume, live.** **Done, live-verified 2026-09** — item 4's Traveloka replay run *is* this test: it broke naturally (a real login-prompt interstitial, not an artificially-forced one) at step 8, Discover resumed on the live page without restarting from search, and the recording saved afterward is exactly the kept prefix plus Discover's new tail.
 7. **Sold-out / dead-end case.** Point Discover at a hotel/provider combination known to have no availability. Must fail cleanly (not hang, not loop to `max_steps` silently) and hand control back to the fallback loop.
 8. **Fallback in the wild.** A job with an intentionally-broken top provider (bad URL) and a working second one. Must skip the first and succeed on the second, and the returned result must say which provider actually succeeded.
@@ -171,10 +264,40 @@ A cold Discover run against Agoda first *reported* success (`reached_payment: tr
 
 Net effect: Agoda's major-OTA deliverable (Tier-2 item 1) is a genuine, verified success. The calendar fix is verified correct by direct DOM inspection but wasn't exercised end-to-end in either fresh capture that followed it, because Agoda's own server-side "recently viewed" search suggestion kept auto-filling the exact target dates before the calendar ever had to open — so every recording captured after the fix happens to have zero pixel-fallback steps regardless, without the fix having been forced to prove itself against a real calendar click.
 
+## Changed dates/room type (2026-09): the actual substitution mechanism
+
+Auditing this project against the trial-task spec directly (rather than trusting this document's own earlier claims) surfaced a real gap: **no recording ever tagged `checkIn`/`checkOut`/`roomType` as a substitutable field at all**, and the gap was structural, not an oversight in test coverage. Date selection is always a *click* on a calendar day cell whose own locator name literally encodes the date (`"date-cell-15-10-2026"`, `"Tue Oct 20 2026"`) — and `replay.mjs`'s parameter-substitution logic only ever rewrote values for `fill`/`select` actions, never for `click`. Room selection has the identical problem (a hardcoded click on a specific room's display name). The one live "changed stay period" test on record turned out, on honest re-reading of its own trace, to have replayed the *same* dates — the item's title had outlived what was actually tested.
+
+Fixed with three coordinated changes:
+- **`SYSTEM_PROMPT`** now lets a `click` action optionally carry `field`/`text` too (previously only `fill`/`select` could), with explicit rules telling the model to tag a calendar day-cell click with `field: "checkIn"|"checkOut"` and the date in `YYYY-MM-DD` format, and a room-selection click with `field: "roomType"` and the room's own displayed name.
+- **`discover.mjs`'s step-recording** captures that `text` for a field-tagged `click`, the same way it already did for `fill`/`select`.
+- **`replay.mjs`** gained `valueChanged(step, params)`: before attempting a field-tagged `click`, it compares the recorded value against what THIS run actually wants. A genuine mismatch is treated as an immediate break at that exact step — hand it to Discover to re-solve live — rather than trying to pattern-match or rewrite an unknown site's own date-cell naming convention (which has no generic solution across arbitrary sites). No preference requested (`roomType: null`) never forces a break, matching "room type is a preference, not a hard filter." Fully backward-compatible: a step with no `field` behaves exactly as before.
+
+Covered by two fixture regression tests in `test/replay.test.mjs`; a matching-date click replays normally, a changed-date click breaks at that exact index *without ever attempting the stale click*.
+
+Live-verified on Traveloka: a fresh capture correctly tagged both date-cell clicks (`field: "checkIn"`/`"checkOut"`) and the room-selection click (`field: "roomType"`). Replaying it against genuinely different dates (Nov 5-8 instead of the recorded Oct 15-18) correctly broke at the check-in step every time across 3 live attempts (`resumedFromStep: 1`, never touching the stale Oct-15 locator), and Discover's resume did correctly click the new Nov 5 date on its first attempt each time — the mechanism itself works. None of the 3 attempts finished all the way to payment, though: picking a date in November required the model to first advance this site's 2-month calendar forward, and it got confused mid-navigation (re-clicking a date it had already set, then producing malformed output) on all 3 tries. That's a separate, genuine gap in multi-month calendar navigation — not a flaw in the substitution logic — and, on reflection, one this project introduced on itself: the spec only asks for "a different stay period," not one that crosses into a month the calendar isn't already showing. A same-month date change (e.g. Oct 20-23 instead of Oct 15-18) was never tried live and would plausibly complete cleanly, since it wouldn't touch calendar navigation at all; not pursued further after 3 attempts (~$0.86) once the actual, spec-relevant question (does the substitution mechanism work) was already answered.
+
+One more thing found and fixed along the way, unrelated to the substitution logic itself but discovered while live-testing it: **`askModel()`'s `max_tokens` was 600**, tight enough that the model got cut off mid-JSON ("unparseable model output") after writing a longer-than-usual `reason` while genuinely uncertain about a date click. Bumped to 1024 — cheap insurance on the rare turns that need it.
+
 ## Known unresolved case: Agoda replay-then-resume
 
 Logged honestly, same as Hotel McCoy below. A replay of the current (all-role/name) Agoda recording got 5 of its 9 steps in with zero model calls — SEARCH, hotel-name fill, property link, scroll, room selection — before breaking on a checkout-flow interstitial that isn't consistently present run-to-run (present when the recording was captured, absent on the replay attempt). Discover's resume from that break point did not reach payment this attempt (`why: stuck`, $0.26) — unlike the equivalent Traveloka case (Tier-2 item 4), where the resume succeeded cleanly. Not pursued further at additional cost past this point; the category's deliverable is already satisfied by the cold-Discover success in Tier-2 item 1, and partial-prefix determinism (5 of 9 steps, zero model calls) is real and demonstrated even though the full resume-to-success chain isn't proven on this provider.
 
+## Mews-specific fixes (2026-09): six real bugs, found and fixed one at a time, plus one honestly-flagged remainder
+
+Mari Jean Hotel (Mews) turned out to be the hardest of the three categories - not because Discover couldn't drive the site, but because five separate, genuine bugs in *this project's own verification logic* each masked the next one, so fixing one just exposed the next symptom. Documented here in the order found, since each one is a real, distinct, live-verified defect:
+
+1. **`recordingStore.mjs` dropped every pixel-fallback fill step**, including legitimately-filled ones - `EDITABLE_ROLES.has(null)` treated "no role recorded" identically to "wrong role recorded". A saved Mews recording ended up with zero fill steps at all. Fixed: a missing role is now kept, not discarded (only a *confirmed wrong* role is dropped).
+2. **`getInteractiveElements()` couldn't see anything inside Mews's booking widget at all** - the entire flow (dates, rooms, guest details, everything) lives in a same-page `<iframe>`, and element detection only ever evaluated the main frame. Every interaction had always been a blind pixel click as a result. Fixed: element detection now walks every frame, and `executeAction()` builds its locator against the correct frame, not always the main page.
+3. **`isRelevantFrame()` didn't recognize Datatrans** (Mews's real, unlisted payment processor), so the genuine card-tokenization iframe was silently excluded from payment detection on every run. Fixed with a URL-content heuristic (`/payment/`, "securefield", "tokenize") that generalizes past any one fixed host list - the same fix that later also caught this:
+4. **The Mews widget iframe itself reports as `about:blank` to Playwright** (it was never given a real `src`), so the SAME exclusion that fixed #3 was also hiding the real guest-details page's own text - including the literal word "Payment" and the total price - from the aggregated payment-text check. Fixed: an `about:blank` frame now defaults to relevant, since an ad/tracking network is never `about:blank` (it always navigates to its own real, identifying URL).
+5. **`requiredFieldsFilled()` only re-checks fields the trace claims were filled** - when the model filled only "First name" and the automatic check fired anyway (Mews shows the payment section on the same page as guest details, no separate "continue" boundary), Last name/Email/Phone sat visibly empty and unnoticed. Fixed with `hasEmptyRequiredGuestField()`, scanning for any visible, currently-empty field whose *label* looks like a standard guest-detail field, independent of what the trace does or doesn't mention.
+6. **That new check then flagged a false positive of its own**: a "marketing-emails-checkbox" opt-in toggle has "emails" in its own `name` attribute, coincidentally matching the `e-?mail` pattern - and a checkbox's `.value` is never a meaningful "filled in" signal. Fixed by scoping the scan to genuine text-entry controls only (the same `isTextEntry` distinction `accessibleName()` already draws), confirmed directly against the live page before spending on another run.
+
+All six were confirmed with direct evidence (not guessed) before being called fixed - either a live debug-flag run pinpointing the exact failing check, or direct DOM inspection of the actual page. After fix #6, a live run finally returned a genuine `success: true` via the programmatic check, not a self-report - $0.49, `proof/Own_website_Mews__1788778488258.png`.
+
+**One remainder, flagged honestly rather than hidden**: that same proof screenshot shows a live validation error - "Select the country code and enter a valid number" - on the phone field, which holds a German-style number ("+1 700 000 000") the site's own format validation rejects. The programmatic check only verifies fields are non-empty, not that the site's own validation accepts their content, and for Mews specifically the payment section is part of the same static page layout as guest details from the moment it loads - visible regardless of whether the form above it is validly complete. This is a distinct, deeper gap from the six above (a validation-acceptance question, not an empty-field question), not pursued further at additional cost given the deadline; a generic check for `aria-invalid`/visible error text near required fields is the natural next fix, not yet built.
+
 ## Known unresolved case: Hotel McCoy (Cloudbeds)
 
-Logged honestly rather than silently dropped, per the "honest failure log" deliverable item. Hotel McCoy's own Cloudbeds-powered booking widget (Tucson, AZ) was live-tested extensively and its guest-details "Continue" button intermittently does nothing even when every field is verifiably correct in the DOM (confirmed via debug screenshots across multiple attempts). Two real, separate bugs were found and fixed along the way (a native `<select>` reset the entire widget when confirmed with Enter instead of Tab; the ZIP field triggers a several-second async tax recalculation that can misreport as empty if checked too soon) — neither turned out to be the actual remaining blocker. A zero-cost, no-agent Playwright script reproducing the exact same field values with `.fill()` succeeded on its first try, which rules out the two leading theories tested (untrusted synthetic events, and an expired reservation hold from the slower multi-step-LLM pacing) without identifying a replacement one. This category's actual deliverable was satisfied instead by Mari Jean Hotel (Mews-powered), which reached payment cleanly with no comparable issue — McCoy is documented here as a real, reproducible site-specific gap rather than pursued further at additional cost.
+Logged honestly rather than silently dropped, per the "honest failure log" deliverable item. Hotel McCoy's own Cloudbeds-powered booking widget (Tucson, AZ) was live-tested extensively and its guest-details "Continue" button intermittently does nothing even when every field is verifiably correct in the DOM (confirmed via debug screenshots across multiple attempts). Two real, separate bugs were found and fixed along the way (a native `<select>` reset the entire widget when confirmed with Enter instead of Tab; the ZIP field triggers a several-second async tax recalculation that can misreport as empty if checked too soon) — neither turned out to be the actual remaining blocker. A zero-cost, no-agent Playwright script reproducing the exact same field values with `.fill()` succeeded on its first try, which rules out the two leading theories tested (untrusted synthetic events, and an expired reservation hold from the slower multi-step-LLM pacing) without identifying a replacement one. This category's actual deliverable was satisfied instead by Mari Jean Hotel (Mews-powered) - see "Mews-specific fixes" above for the real story there too - McCoy is documented here as a real, reproducible site-specific gap rather than pursued further at additional cost.
