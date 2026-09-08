@@ -1,0 +1,179 @@
+[
+  {
+    "action": "click",
+    "role": "link",
+    "name": "CHECK AVAILABILITY & RATES",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "wait",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Select dates",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Next month",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "link",
+    "name": "CHECK AVAILABILITY & RATES",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "wait",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Select dates",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Next month",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "10 November 2026, Tuesday",
+    "x": null,
+    "y": null,
+    "text": "2026-11-10",
+    "field": "checkIn"
+  },
+  {
+    "action": "click",
+    "role": null,
+    "name": null,
+    "x": 864,
+    "y": 420,
+    "text": "2026-11-12",
+    "field": "checkOut"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Next",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "wait",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Show rates",
+    "x": null,
+    "y": null,
+    "text": "Deluxe King 3rd Floor Room",
+    "field": "roomType"
+  },
+  {
+    "action": "wait",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "scroll",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null,
+    "direction": "down"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Book now",
+    "x": null,
+    "y": null,
+    "text": "Regular Rate",
+    "field": "roomType"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Continue",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "First name",
+    "x": null,
+    "y": null,
+    "text": "Max",
+    "field": "firstName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Last name",
+    "x": null,
+    "y": null,
+    "text": "Mustermann",
+    "field": "lastName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Email",
+    "x": null,
+    "y": null,
+    "text": "maxmustermann.abs.test@gmail.com",
+    "field": "email"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Phone",
+    "x": null,
+    "y": null,
+    "text": "5205550100",
+    "field": "phone"
+  }
+]

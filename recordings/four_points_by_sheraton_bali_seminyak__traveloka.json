@@ -1,0 +1,156 @@
+[
+  {
+    "action": "click",
+    "role": "textbox",
+    "name": "Check-in",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "generic",
+    "name": "date-cell-15-10-2026",
+    "x": null,
+    "y": null,
+    "text": "2026-10-15",
+    "field": "checkIn"
+  },
+  {
+    "action": "click",
+    "role": "generic",
+    "name": "date-cell-18-10-2026",
+    "x": null,
+    "y": null,
+    "text": "2026-10-18",
+    "field": "checkOut"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Search",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "wait",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Select Room",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Got it",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "scroll",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null,
+    "direction": "down"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Choose\nChoose",
+    "x": null,
+    "y": null,
+    "text": "Deluxe Room, Guest room, 1 King, Balcony",
+    "field": "roomType"
+  },
+  {
+    "action": "click",
+    "role": null,
+    "name": null,
+    "x": 1107,
+    "y": 24,
+    "field": null
+  },
+  {
+    "action": "scroll",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null,
+    "direction": "down"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Choose\nChoose",
+    "x": null,
+    "y": null,
+    "text": "Deluxe Room, Guest room, 1 King, Balcony",
+    "field": "roomType"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "your_email@mail.com",
+    "x": null,
+    "y": null,
+    "text": "maxmustermann.abs.test@gmail.com",
+    "field": "email"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "",
+    "x": null,
+    "y": null,
+    "text": "Max",
+    "field": "firstName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "",
+    "x": null,
+    "y": null,
+    "text": "Mustermann",
+    "field": "lastName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "",
+    "x": null,
+    "y": null,
+    "text": "1700000000",
+    "field": "phone"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Continue",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "wait",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null
+  }
+]

@@ -172,6 +172,38 @@ export async function hasEmptyRequiredGuestField(page) {
   return false;
 }
 
+// Live-verified 2026-09 on Mari Jean Hotel (Mews): a run reached genuine success by every OTHER check here
+// (payment text+price, real card fields, no field left empty) while the proof screenshot itself showed a
+// live, visible error - "Select the country code and enter a valid number" - on the phone field, because
+// the fictional number wasn't in a format the site's own validation accepted for its detected country
+// context. Every check above asks "is something here", never "does the site itself consider this valid" -
+// a materially different, and just as real, way to not actually be done yet. `aria-invalid="true"` is the
+// standard, widely-supported ARIA signal for exactly this ("this field's current value failed validation"),
+// confirmed present on both the phone input and its country-code selector on the live page - a generic
+// check for it costs nothing on sites that don't use it (simply never matches) and directly closes this
+// gap on ones that do, without knowing anything site-specific in advance.
+export async function hasInvalidField(page) {
+  const checkFrame = async (frame) => {
+    try {
+      return await frame.evaluate(() => {
+        const visible = (el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        };
+        return [...document.querySelectorAll('[aria-invalid="true"]')].some(visible);
+      });
+    } catch {
+      return false;
+    }
+  };
+  const mainUrl = page.url();
+  for (const frame of page.frames()) {
+    if (!isRelevantFrame(frame.url(), mainUrl)) continue;
+    if (await checkFrame(frame)) return true;
+  }
+  return false;
+}
+
 // Re-reads every `fill` step in the trace that was tagged with a `field` (i.e. every field the agent
 // itself considers a required, goal-relevant input - hotel name, dates, guest name/email/phone, etc.)
 // and confirms the live DOM element still holds a non-empty value.
@@ -227,6 +259,13 @@ export async function requiredFieldsFilled(page, trace) {
   }
   if (emptyGuestField) {
     return { ok: false, missingField: null, reason: 'a visible guest-detail field is still empty (never attempted)' };
+  }
+  const invalidField = await hasInvalidField(page);
+  if (process.env.DEBUG_PAYMENT_CHECK) {
+    console.error(`[requiredFieldsFilled] hasInvalidField=${invalidField}`);
+  }
+  if (invalidField) {
+    return { ok: false, missingField: null, reason: 'a field is marked aria-invalid - filled, but rejected by the site\'s own validation' };
   }
   return { ok: true };
 }

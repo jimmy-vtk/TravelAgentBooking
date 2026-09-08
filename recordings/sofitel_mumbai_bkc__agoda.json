@@ -1,0 +1,97 @@
+[
+  {
+    "action": "click",
+    "role": "button",
+    "name": "SEARCH",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "fill",
+    "role": "combobox",
+    "name": "Enter a destination or property",
+    "x": null,
+    "y": null,
+    "text": "Sofitel Mumbai BKC",
+    "field": "hotelName"
+  },
+  {
+    "action": "click",
+    "role": "link",
+    "name": "Sofitel Mumbai BKC",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "scroll",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null,
+    "direction": "down"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Book Luxury Room, 2 Single Beds Offer 2",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "First name *",
+    "x": null,
+    "y": null,
+    "text": "Max",
+    "field": "firstName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Last name *",
+    "x": null,
+    "y": null,
+    "text": "Mustermann",
+    "field": "lastName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Email *",
+    "x": null,
+    "y": null,
+    "text": "maxmustermann.abs.test@gmail.com",
+    "field": "email"
+  },
+  {
+    "action": "select",
+    "role": "combobox",
+    "name": "Country/region of residence *\n\nAustralia\nChina\nIndonesia\nJapan\nMalaysia\nSingapore\nSouth Korea\nThailand\nUnited Kingdom\nUnited States\nAfghanistan\nAlbania\nAlgeria\nAmerican Samoa\nAndorra\nAngola\nAnguilla\nAntigua & Barbuda\nArgentina\nArmenia\nAruba\nAustralia\nAustria\nAzerbaijan\nBahamas\nBahrain\nBangladesh\nBarbados\nBelarus\nBelgium\nBelize\nBenin\nBermuda\nBhutan\nBolivia\nBonaire, Sint Eustatius and Saba\nBosnia Herzegovina\nBotswana\nBrazil\nBritish Indian Ocean Territory\nBritish Virgin Islands\nBrunei Darussalam\nBulgaria\nBurkina Faso\nBurundi\nCambodia\nCameroon\nCanada\nCape Verde\nCayman Islands\nCentral African Republic\nChad\nChile\nChina\nChristmas Island\nCocos (Keeling) Islands\nColombia\nComoros\nCook Islands\nCosta Rica\nCote D'ivoire\nCroatia\nCuracao\nCyprus\nCzech Republic\nDemocratic Republic of the Congo\nDenmark\nDjibouti\nDominica\nDominican Republic\nEcuador\nEgypt\nEl Salvador\nEquatorial Guinea\nEritrea\nEstonia\nEswatini\nEthiopia\nFalkland Islands\nFaroe Islands\nFederated States of Micronesia\nFiji\nFinland\nFrance\nFrench Guiana\nFrench Polynesia\nGabon\nGambia\nGeorgia\nGermany\nGhana\nGibraltar\nGreece\nGreenland\nGrenada\nGuadeloupe\nGuam\nGuatemala\nGuernsey\nGuinea\nGuinea-Bissau\nGuyana\nHaiti\nHoly See (Vatican City)\nHonduras\nHong Kong\nHungary\nIceland\nIndia\nIndonesia\nIraq\nIreland\nIsle Of Man\nIsrael\nItaly\nJamaica\nJapan\nJersey\nJordan\nKazakhstan\nKenya\nKiribati\nKosovo\nKuwait\nKyrgyzstan\nLaos\nLatvia\nLebanon\nLesotho\nLiberia\nLibya\nLiechtenstein\nLithuania\nLuxembourg\nMacau\nMadagascar\nMalawi\nMalaysia\nMaldives\nMali\nMalta\nMarshall Islands\nMartinique\nMauritania\nMauritius\nMayotte\nMexico\nMoldova\nMonaco\nMongolia\nMontenegro\nMontserrat\nMorocco\nMozambique\nMyanmar\nNamibia\nNauru\nNepal\nNetherlands\nNew Caledonia\nNew Zealand\nNicaragua\nNiger\nNigeria\nNiue\nNorfolk Island\nNorth Macedonia\nNorthern Mariana Islands\nNorway\nOman\nPakistan\nPalau\nPalestinian Territory\nPanama\nPapua New Guinea\nParaguay\nPeru\nPhilippines\nPitcairn Islands\nPoland\nPortugal\nPuerto Rico\nQatar\nRepublic of Congo\nReunion Island\nRomania\nRussia\nRwanda\nSaint Barthelemy\nSaint Helena\nSaint Kitts And Nevis\nSaint Lucia\nSaint Martin (France)\nSaint Pierre and Miquelon\nSamoa\nSan Marino\nSao Tome and Principe\nSaudi Arabia\nSenegal\nSerbia\nSeychelles\nSierra Leone\nSingapore\nSint Maarten (Netherlands)\nSlovakia\nSlovenia\nSolomon Islands\nSomalia\nSouth Africa\nSouth Georgia Islands\nSouth Korea\nSouth Sudan\nSpain\nSri Lanka\nSt. Vincent & Grenadines\nSudan\nSuriname\nSweden\nSwitzerland\nTaiwan\nTajikistan\nTanzania\nThailand\nTimor-Leste\nTogo\nTokelau\nTonga\nTrinidad & Tobago\nTunisia\nTurkey\nTurkmenistan\nTurks & Caicos Islands\nTuvalu\nU.S. Virgin Islands\nUganda\nUkraine\nUnited Arab Emirates\nUnited Kingdom\nUnited States\nUruguay\nUzbekistan\nVanuatu\nVenezuela\nVietnam\nWallis and Futuna\nWestern Sahara\nYemen\nZambia\nZimbabwe",
+    "x": null,
+    "y": null,
+    "text": "Germany",
+    "field": null
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Mobile number",
+    "x": null,
+    "y": null,
+    "text": "1700000000",
+    "field": "phone"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "NEXT: FINAL STEP",
+    "x": null,
+    "y": null,
+    "field": null
+  }
+]

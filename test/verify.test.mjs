@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, isRelevantFrame } from '../src/verify.mjs';
+import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, isRelevantFrame, hasInvalidField } from '../src/verify.mjs';
 import { startFixture } from './fixture/server.mjs';
 
 test('looksLikePayment: positive - real payment wording + price', () => {
@@ -161,6 +161,43 @@ test('requiredFieldsFilled: fails when a tracked field is empty, passes once fil
     // fill everything visible on the page -> now it genuinely passes
     await page.getByRole('textbox', { name: 'Last name' }).fill('Mustermann');
     await page.getByRole('textbox', { name: 'Phone' }).fill('1700000000');
+    result = await requiredFieldsFilled(page, trace);
+    assert.equal(result.ok, true);
+
+    await browser.close();
+  } finally {
+    server.close();
+  }
+});
+
+test('REGRESSION (found live 2026-09 on Mari Jean Hotel/Mews): a field that is filled but fails the site\'s own validation (aria-invalid="true") must block success, not just an empty field', async () => {
+  const { server, baseUrl } = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/guest`);
+
+    await page.getByRole('textbox', { name: 'First name' }).fill('Max');
+    await page.getByRole('textbox', { name: 'Last name' }).fill('Mustermann');
+    await page.getByRole('textbox', { name: 'Email' }).fill('test@example.com');
+    // Filled, but marked invalid by the site's own (simulated) validation - not empty, just rejected.
+    const phone = page.getByRole('textbox', { name: 'Phone' });
+    await phone.fill('not-a-real-phone-number');
+    await phone.evaluate((el) => el.setAttribute('aria-invalid', 'true'));
+
+    assert.equal(await hasInvalidField(page), true);
+    const trace = [
+      { action: 'fill', role: 'textbox', name: 'First name', field: 'firstName' },
+      { action: 'fill', role: 'textbox', name: 'Last name', field: 'lastName' },
+      { action: 'fill', role: 'textbox', name: 'Email', field: 'email' },
+      { action: 'fill', role: 'textbox', name: 'Phone', field: 'phone' },
+    ];
+    let result = await requiredFieldsFilled(page, trace);
+    assert.equal(result.ok, false, 'a filled-but-invalid field must block success');
+
+    // Clear the error the way a real fix would - correct the value and the validation state.
+    await phone.fill('1700000000');
+    await phone.evaluate((el) => el.setAttribute('aria-invalid', 'false'));
     result = await requiredFieldsFilled(page, trace);
     assert.equal(result.ok, true);
 
