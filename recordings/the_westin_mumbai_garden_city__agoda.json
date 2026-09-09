@@ -1,0 +1,97 @@
+[
+  {
+    "action": "click",
+    "role": "button",
+    "name": "SEARCH",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": null,
+    "name": null,
+    "x": 206,
+    "y": 517,
+    "field": null
+  },
+  {
+    "action": "click",
+    "role": "link",
+    "name": "The Westin Mumbai Garden City",
+    "x": null,
+    "y": null,
+    "field": null
+  },
+  {
+    "action": "scroll",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null,
+    "direction": "down"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "Book Guest room, 2 Double, City view Offer 1",
+    "x": null,
+    "y": null,
+    "text": "Guest room, 2 Double, City view",
+    "field": "roomType"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "First name *",
+    "x": null,
+    "y": null,
+    "text": "Max",
+    "field": "firstName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Last name *",
+    "x": null,
+    "y": null,
+    "text": "Mustermann",
+    "field": "lastName"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Email *",
+    "x": null,
+    "y": null,
+    "text": "maxmustermann.abs.test@gmail.com",
+    "field": "email"
+  },
+  {
+    "action": "fill",
+    "role": "textbox",
+    "name": "Mobile number",
+    "x": null,
+    "y": null,
+    "text": "1700000000",
+    "field": "phone"
+  },
+  {
+    "action": "scroll",
+    "role": null,
+    "name": null,
+    "x": null,
+    "y": null,
+    "field": null,
+    "direction": "down"
+  },
+  {
+    "action": "click",
+    "role": "button",
+    "name": "NEXT: FINAL STEP",
+    "x": null,
+    "y": null,
+    "field": null
+  }
+]

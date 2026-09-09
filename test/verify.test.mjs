@@ -20,6 +20,20 @@ test('looksLikePayment: negative - unrelated page with a stray currency symbol',
   assert.equal(looksLikePayment('This café serves €3 coffee. About us. Contact.'), false);
 });
 
+// REGRESSION (found live 2026-09 on Agoda, "The Westin Mumbai Garden City" - a genuinely different hotel
+// used specifically to prove generalization beyond the one Agoda property already proven): a real, fully
+// correct payment page (real card fields, every guest field filled, right hotel, nothing aria-invalid) was
+// never recognized as success because the price was shown in Vietnamese Dong ("₫ 20,540,983") - a direct
+// side effect of this project's own browser context hardcoding an Asia/Saigon timezone, which leads Agoda
+// to default this session's price display to VND regardless of which hotel is being booked.
+test('looksLikePayment: positive - Vietnamese Dong pricing (live gap, Agoda defaults to VND for this session\'s timezone)', () => {
+  assert.equal(looksLikePayment('Credit/debit card. Card Number. Expiry date. CVC/CVV. Price ₫ 20,540,983'), true);
+});
+
+test('looksLikePayment: negative - a stray Dong amount alone, without real payment wording, still does not trip it', () => {
+  assert.equal(looksLikePayment('Room price (1 room x 3 nights) ₫ 17,407,613. Click Reserve to continue.'), false);
+});
+
 // GUARDRAIL (colleague review, 2026-09): every check above only ever asks "is this A real, validly-filled
 // payment page" - never "is this THE payment page for the hotel we were actually asked to book". Manually
 // auditing every live proof screenshot on file (Agoda/Traveloka/Mews) found the hotel name was in fact
@@ -59,6 +73,28 @@ test('REGRESSION (found live on Halalbooking, 2026-09): a page whose own breadcr
     const text = await page.evaluate(() => document.body.innerText);
     assert.equal(looksLikePayment(text), true, 'sanity check: the text-only signal is a false positive here, as expected');
     assert.equal(await hasPaymentInputFields(page), false, 'the DOM-based check must reject it - no card fields are actually present');
+
+    await browser.close();
+  } finally {
+    server.close();
+  }
+});
+
+// REGRESSION (found live 2026-09 on Agoda, generic Mumbai SEARCH RESULTS page - surfaced while chasing the
+// VND false-negative on a different, genuinely new hotel used to prove generalization): a real search-filter
+// checkbox labeled "Book without credit card" satisfied CARD_FIELD_WORDS' "credit card" text match, and a
+// "Payment options" filter section heading satisfied PAYMENT_WORDS on the bare word "Payment" - together,
+// on a page with no real booking flow started at all, wrongly reported a genuine success.
+test('REGRESSION (found live 2026-09 on Agoda): a search-filter CHECKBOX labeled "Book without credit card" must not count as a real card-entry field', async () => {
+  const { server, baseUrl } = await startFixture();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${baseUrl}/results-with-cc-filter`);
+
+    const text = await page.evaluate(() => document.body.innerText);
+    assert.equal(looksLikePayment(text), true, 'sanity check: the "Payment options" heading + price alone IS a text-only false positive, as expected');
+    assert.equal(await hasPaymentInputFields(page), false, 'a checkbox is not a real card-number entry field, regardless of its label text');
 
     await browser.close();
   } finally {

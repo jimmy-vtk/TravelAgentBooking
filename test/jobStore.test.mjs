@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { rmSync, existsSync } from 'node:fs';
 
 process.env.JOB_DB_PATH = '.test-jobs.sqlite';
-const { getJob, insertJob, writeJobResult } = await import('../src/jobStore.mjs');
+const { getJob, insertJob, writeJobResult, orderProviders } = await import('../src/jobStore.mjs');
 
 test.after(() => {
   for (const f of ['.test-jobs.sqlite', '.test-jobs.sqlite-journal']) {
@@ -49,4 +49,33 @@ test('jobStore: writeJobResult - failure case records the reason, not silently',
   const job = getJob('job-3');
   assert.equal(job.status, 'needs_review');
   assert.equal(job.error, 'all providers exhausted');
+});
+
+// REGRESSION (colleague review, 2026-09): `selected_provider` round-tripped through storage correctly (see
+// above) but worker.mjs never actually read it - a job whose selected provider differed from providers[0]
+// would have silently started from the wrong one. orderProviders() is what worker.mjs now calls before
+// handing the list to bookHotel().
+test('orderProviders: puts the job\'s selected_provider first even when it is NOT providers[0]', () => {
+  const providers = [
+    { name: 'Vio.com', pricePerNight: 218 },
+    { name: 'Traveluro', pricePerNight: 219 },
+    { name: 'Agoda', pricePerNight: 230 },
+  ];
+  assert.deepEqual(orderProviders(providers, 'Agoda'), [
+    { name: 'Agoda', pricePerNight: 230 },
+    { name: 'Vio.com', pricePerNight: 218 },
+    { name: 'Traveluro', pricePerNight: 219 },
+  ]);
+});
+
+test('orderProviders: already-first selected_provider is a no-op', () => {
+  const providers = [{ name: 'Vio.com', pricePerNight: 218 }, { name: 'Traveluro', pricePerNight: 219 }];
+  assert.deepEqual(orderProviders(providers, 'Vio.com'), providers);
+});
+
+test('orderProviders: missing/unmatched selected_provider falls back to the given order unchanged, does not throw', () => {
+  const providers = [{ name: 'Vio.com', pricePerNight: 218 }];
+  assert.deepEqual(orderProviders(providers, null), providers);
+  assert.deepEqual(orderProviders(providers, 'Sold Out Provider'), providers);
+  assert.deepEqual(orderProviders(undefined, 'Vio.com'), []);
 });

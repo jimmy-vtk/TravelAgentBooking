@@ -66,6 +66,20 @@ const PAGES = {
     <button onclick="location.href='/guest'">Reserve</button>
   </body></html>`,
 
+  // Reproduces the false positive found live on Agoda (2026-09), on a generic Mumbai SEARCH RESULTS page -
+  // no real booking flow started at all. Two separate real signals happened to coincide: a filter section
+  // literally titled "Payment options" (satisfies PAYMENT_WORDS on the bare word "Payment"), and a genuine
+  // filter CHECKBOX labeled "Book without credit card" (satisfies CARD_FIELD_WORDS' "credit card" text) -
+  // a checkbox, not a real card-number entry field. hasPaymentInputFields() must reject this.
+  '/results-with-cc-filter': `<!doctype html><html><body>
+    <h1>Results</h1>
+    <div>Fixture Hotel - ₫ 5,802,538</div>
+    <h2>Payment options</h2>
+    <label><input type="checkbox" name="noCreditCard" /> Book without credit card</label>
+    <label><input type="checkbox" name="payAtHotel" /> Pay at the hotel</label>
+    <button onclick="location.href='/guest'">Reserve</button>
+  </body></html>`,
+
   // A tiny calendar stand-in: two day cells, each named the way a real site's own date-cell locator would
   // be (the accessible name literally IS the date) - stands in for Traveloka's "date-cell-1-10-2026" and
   // Agoda's "Tue Oct 20 2026" patterns without depending on either site's exact markup.
@@ -81,7 +95,11 @@ export function startFixture(port = 0) {
     const path = req.url.split('?')[0];
     const body = PAGES[path];
     if (!body) { res.writeHead(404); res.end('not found'); return; }
-    res.writeHead(200, { 'content-type': 'text/html' });
+    // charset=utf-8 is required, not cosmetic - without it, a browser reading this response falls back to
+    // Latin-1-style decoding, mangling any multi-byte UTF-8 character this fixture serves (found live while
+    // adding the VND regression test below: "₫" arrived at the page as "â‚«"). The real sites this project
+    // talks to all declare UTF-8 correctly; this is a test-fixture-only gap, never a production one.
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(body.replace('__PORT__', server.address().port));
   });
   return new Promise((resolve) => {

@@ -2,7 +2,7 @@
 // bookHotel(...), writes the result back. Not a service - runs once and exits.
 //
 // Usage: node src/cli/worker.mjs --job-id abc123
-import { getJob, writeJobResult } from '../jobStore.mjs';
+import { getJob, writeJobResult, orderProviders } from '../jobStore.mjs';
 import { bookHotel } from '../bookHotel.mjs';
 
 function parseArgs(argv) {
@@ -29,7 +29,7 @@ const result = await bookHotel({
   checkOut: job.check_out,
   roomType: job.room_type,
   guests: job.guests,
-  providers: job.providers,
+  providers: orderProviders(job.providers, job.selected_provider),
 });
 
 writeJobResult(job.id, {

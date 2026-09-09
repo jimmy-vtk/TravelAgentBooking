@@ -77,34 +77,44 @@ const PROFILE_DIR = process.env.ABS_PROFILE_DIR || '.abs-profile';
 // is genuinely different per provider/flow complexity, not a fixed constant.
 const MAX_STEPS = Number(process.env.MAX_STEPS) || 25;
 
-export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests, providers, onStep }) {
+// `deps` is a test-only seam (default: {} - every field below falls back to the real implementation, so
+// production behavior is byte-for-byte unchanged when omitted). Exists so the provider-fallback loop itself
+// - try cheapest first, skip a genuine failure, succeed on the next one, name the right provider in the
+// result - can be proven with a fixture test (test/bookHotel.test.mjs) with no real browser and no model
+// call, instead of remaining "correct by inspection" only. See README's own "known gap" note this closes.
+export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests, providers, onStep, deps = {} }) {
   const params = { hotelName, checkIn, checkOut, roomType, guests };
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    // Default HEADED, not headless - live-verified 2026-09 via a controlled A/B on Traveloka: the SAME
-    // network IP, SAME real-Chrome binary (see `channel` below), SAME locale/timezone/persistent-profile/
-    // human-paced actions got an explicit "Access is temporarily restricted - bot detection" wall on every
-    // headless run (2/2) and sailed all the way to guest-details entry with zero blocks on every headed
-    // run (2/2). Headless Chrome - even the real binary, even with every navigator.webdriver-style patch
-    // applied - has GPU/WebGL compositing and rendering differences from headed Chrome that sophisticated
-    // bot management (Akamai/DataDome/PerimeterX-class systems, which this site's block-page template
-    // matches) checks for independently of behavior. Set HEADLESS=1 only for environments with no display.
-    headless: process.env.HEADLESS === '1',
-    // Without this, patchright launches its own bundled OPEN-SOURCE Chromium build, not the real Google
-    // Chrome binary - even with every navigator.webdriver-style JS patch applied, that's a separate,
-    // deeper fingerprint gap (no Widevine DRM, different codec licensing, different chrome://version
-    // build flags). Real Chrome is what Claude-in-Chrome drives on this same machine/IP, so matching that
-    // binary removes one more variable versus the bundled Chromium build, even though the headed-vs-
-    // headless distinction above turned out to be the decisive factor for Traveloka specifically.
-    channel: 'chrome',
-    viewport: { width: 1280, height: 800 },
-    // Left unset, Playwright/patchright falls back to the OS default locale/timezone, which does not
-    // necessarily match what a real user's browser reports - live-verified 2026-09: a manual Chrome session
-    // resolved to en-US / Asia/Saigon, and a currency/locale mismatch is one candidate explanation for a
-    // reload-back-to-Overview bug seen only in the automated (unset-locale) session on Trip.com. Matching it
-    // explicitly removes that variable rather than leaving it to whatever this machine happens to default to.
-    locale: process.env.BROWSER_LOCALE || 'en-US',
-    timezoneId: process.env.BROWSER_TIMEZONE || 'Asia/Saigon',
-  });
+  const doWarmSession = deps.warmSession || warmSession;
+  const doDiscover = deps.discover || discover;
+  const doReplay = deps.replay || replay;
+  const context = deps.launchContext
+    ? await deps.launchContext()
+    : await chromium.launchPersistentContext(PROFILE_DIR, {
+      // Default HEADED, not headless - live-verified 2026-09 via a controlled A/B on Traveloka: the SAME
+      // network IP, SAME real-Chrome binary (see `channel` below), SAME locale/timezone/persistent-profile/
+      // human-paced actions got an explicit "Access is temporarily restricted - bot detection" wall on every
+      // headless run (2/2) and sailed all the way to guest-details entry with zero blocks on every headed
+      // run (2/2). Headless Chrome - even the real binary, even with every navigator.webdriver-style patch
+      // applied - has GPU/WebGL compositing and rendering differences from headed Chrome that sophisticated
+      // bot management (Akamai/DataDome/PerimeterX-class systems, which this site's block-page template
+      // matches) checks for independently of behavior. Set HEADLESS=1 only for environments with no display.
+      headless: process.env.HEADLESS === '1',
+      // Without this, patchright launches its own bundled OPEN-SOURCE Chromium build, not the real Google
+      // Chrome binary - even with every navigator.webdriver-style JS patch applied, that's a separate,
+      // deeper fingerprint gap (no Widevine DRM, different codec licensing, different chrome://version
+      // build flags). Real Chrome is what Claude-in-Chrome drives on this same machine/IP, so matching that
+      // binary removes one more variable versus the bundled Chromium build, even though the headed-vs-
+      // headless distinction above turned out to be the decisive factor for Traveloka specifically.
+      channel: 'chrome',
+      viewport: { width: 1280, height: 800 },
+      // Left unset, Playwright/patchright falls back to the OS default locale/timezone, which does not
+      // necessarily match what a real user's browser reports - live-verified 2026-09: a manual Chrome session
+      // resolved to en-US / Asia/Saigon, and a currency/locale mismatch is one candidate explanation for a
+      // reload-back-to-Overview bug seen only in the automated (unset-locale) session on Trip.com. Matching it
+      // explicitly removes that variable rather than leaving it to whatever this machine happens to default to.
+      locale: process.env.BROWSER_LOCALE || 'en-US',
+      timezoneId: process.env.BROWSER_TIMEZONE || 'Asia/Saigon',
+    });
   const attempts = [];
 
   try {
@@ -113,11 +123,11 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
       let result;
 
       try {
-        await warmSession(page, provider.homepage);
+        await doWarmSession(page, provider.homepage);
         const recording = getRecording(hotelName, provider.name);
 
         if (recording) {
-          const replayResult = await replay(page, recording, params);
+          const replayResult = await doReplay(page, recording, params);
           if (!replayResult.broken) {
             // Same cross-frame text a live Discover run reads (see verify.mjs's collectFlowText) - a
             // main-frame-only read here would miss a same-page widget's content (Mews-style) on replay even
@@ -141,7 +151,7 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
                 trace: recording,
               };
           } else {
-            const discovered = await discover(page, { goal: buildGoal(params, { resuming: true }), onStep, maxSteps: MAX_STEPS, hotelName });
+            const discovered = await doDiscover(page, { goal: buildGoal(params, { resuming: true }), onStep, maxSteps: MAX_STEPS, hotelName });
             if (discovered.success) {
               const merged = [...recording.slice(0, replayResult.brokenAtStep), ...discovered.trace];
               saveRecording(hotelName, provider.name, merged);
@@ -149,12 +159,34 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
             result = { ...discovered, trace: discovered.trace, resumedFromStep: replayResult.brokenAtStep };
           }
         } else {
-          const discovered = await discover(page, { goal: buildGoal(params, { resuming: false }), onStep, maxSteps: MAX_STEPS, hotelName });
+          const discovered = await doDiscover(page, { goal: buildGoal(params, { resuming: false }), onStep, maxSteps: MAX_STEPS, hotelName });
           if (discovered.success) saveRecording(hotelName, provider.name, discovered.trace);
           result = discovered;
         }
       } catch (e) {
         result = { success: false, why: 'error', reason: String(e?.message || e) };
+      }
+
+      // Discover may have followed the flow onto a NEW TAB (some sites open booking in one) - the page
+      // actually holding the final state is result.finalPage when that happened, not the original `page`.
+      const activePage = result.finalPage || page;
+
+      // GUARDRAIL (colleague review, 2026-09; §07's own wording: "one screenshot of the state reached PER
+      // ATTEMPT", not per job): this used to screenshot only the winning attempt - a failed provider in the
+      // fallback chain left zero visual evidence of what it actually looked like before moving on. Every
+      // attempt now gets one, tagged success/failed in its filename, with the path recorded on that
+      // attempt's own entry (not just the top-level `proof` field, which still names the WINNING attempt's
+      // screenshot for backward compatibility). Wrapped in try/catch - a page that crashed hard partway
+      // through a failure (e.g. the context itself died) may not be screenshot-able at all; that's a real
+      // limitation of that specific failure mode, not something worth crashing the whole job over.
+      if (!existsSync('proof')) mkdirSync('proof', { recursive: true });
+      const proofPath = `proof/${provider.name.replace(/\W+/g, '_')}_${result.success ? 'success' : 'failed'}_${Date.now()}.png`;
+      let proof = null;
+      try {
+        await activePage.screenshot({ path: proofPath });
+        proof = proofPath;
+      } catch {
+        proof = null;
       }
 
       attempts.push({
@@ -166,6 +198,7 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
         costUsd: result.costUsd ?? 0,
         replayed: !!result.replayed,
         resumedFromStep: result.resumedFromStep,
+        proof,
       });
       logAttempt({
         hotelName,
@@ -182,19 +215,12 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
         resumedFromStep: result.resumedFromStep,
       });
 
-      // Discover may have followed the flow onto a NEW TAB (some sites open booking in one) - the page
-      // actually holding the final state is result.finalPage when that happened, not the original `page`.
-      const activePage = result.finalPage || page;
-
       if (result.success) {
-        if (!existsSync('proof')) mkdirSync('proof', { recursive: true });
-        const proofPath = `proof/${provider.name.replace(/\W+/g, '_')}_${Date.now()}.png`;
-        await activePage.screenshot({ path: proofPath });
         await context.close(); // closes every tab, including the original if a new one was followed - profile data persists on disk
         return {
           status: 'reached_payment',
           provider: provider.name,
-          proof: proofPath,
+          proof,
           attempts,
           tookMs: result.tookMs ?? 0,
           costUsd: result.costUsd ?? 0,

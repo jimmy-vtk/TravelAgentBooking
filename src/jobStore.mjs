@@ -68,3 +68,21 @@ export function writeJobResult(id, { status, error = null, proof_url = null }) {
     db.close();
   }
 }
+
+// GUARDRAIL (colleague review, 2026-09): the data contract (§03) defines `selected_provider` as a field
+// distinct from `providers` - "the provider to start with, USUALLY the cheapest" - implying it isn't
+// necessarily just providers[0]. worker.mjs previously read `job.providers` straight into bookHotel() and
+// never looked at `job.selected_provider` at all: the field round-tripped correctly through storage (see
+// the test above) but was functionally inert - a job whose selected provider differed from providers[0]
+// (a pinned/preferred partner, a promo override) would have silently started from the wrong one. This
+// resolves the ACTUAL attempt order bookHotel() should use: the selected provider first if it's present in
+// the list, the rest following in their given (price-sorted) order - falling back to the given order
+// unchanged if selectedProviderName is missing or names something no longer in the list (e.g. sold out
+// since the job was queued) rather than hard-failing on that alone.
+export function orderProviders(providers, selectedProviderName) {
+  const list = providers ?? [];
+  if (!selectedProviderName) return list;
+  const idx = list.findIndex((p) => p?.name === selectedProviderName);
+  if (idx <= 0) return list; // not found, or already first - nothing to reorder
+  return [list[idx], ...list.slice(0, idx), ...list.slice(idx + 1)];
+}

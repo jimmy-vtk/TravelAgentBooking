@@ -7,7 +7,19 @@
 //     checkout for the WRONG property would satisfy both checks above and still not be a correct booking.
 
 const PAYMENT_WORDS = /payment|credit card|card number|cvv|cvc|billing address|zahlung|kreditkarte|karte\b|carte de cr[ée]dit|expiry|expiration date/i;
-const PRICE_WORDS = /[€$£]\s?\d|\d[.,]\d{2}\s?(eur|usd|gbp|€|\$|£)|total\b|gesamtbetrag|betrag\b/i;
+// REGRESSION (found live 2026-09 on Agoda, "The Westin Mumbai Garden City" - a genuinely different, never-
+// before-seen hotel used specifically to prove the major-OTA path generalizes beyond the one Agoda hotel
+// already proven): a live run reached a real, correct, fully-verified payment page - hasPaymentInputFields,
+// requiredFieldsFilled, hasEmptyRequiredGuestField, hasInvalidField, and matchesRequestedHotel ALL correctly
+// passed - and STILL wasn't recognized as success, because looksLikePayment's own PRICE_WORDS never matched
+// at all. The price on screen was in Vietnamese Dong ("₫ 20,540,983"), not covered by the fixed EUR/USD/GBP/
+// symbol list - a direct side effect of this project's own browser context hardcoding `timezoneId:
+// 'Asia/Saigon'` (see bookHotel.mjs), which leads several real sites (Agoda included) to default their
+// price DISPLAY currency to VND for this session, regardless of what hotel or provider is being booked.
+// The earlier Sofitel/Agoda success never actually exercised this path correctly either - it happened to
+// pass PRICE_WORDS on some other incidental match in the aggregated page text, not because VND pricing was
+// ever actually handled - so this was a real, live gap hiding behind a lucky coincidence, not a new one.
+const PRICE_WORDS = /[€$£₫]\s?\d|\d[.,]\d{2}\s?(eur|usd|gbp|vnd|€|\$|£|₫)|\d[\d.,]*\s?(vnd|₫)|total\b|gesamtbetrag|betrag\b/i;
 
 export function looksLikePayment(text) {
   const t = String(text || '');
@@ -129,6 +141,13 @@ export async function collectFlowText(page) {
 // entirely and the run was misreported as a failure. Playwright's page.frames() reaches into iframes
 // regardless of origin (it drives the browser via CDP, not in-page JS, so same-origin policy doesn't apply)
 // - check every RELEVANT frame (see isRelevantFrame), not just the top-level document.
+// REGRESSION (found live 2026-09 on Agoda, generic Mumbai SEARCH RESULTS page - surfaced while chasing the
+// VND false-negative below, a genuinely separate bug): a search-results page's own sidebar has a real
+// filter CHECKBOX literally labeled "Book without credit card" - a standard "no card required to book"
+// filter, nothing to do with actually being on a payment page. This function's own CARD_FIELD_WORDS text
+// match ("credit card") fired on it, because the input query never excluded non-text-entry control types
+// (checkbox/radio/submit/etc.) - the exact isTextEntry distinction hasEmptyRequiredGuestField() below
+// already draws, for the identical reason (a checkbox's label/value is never a real card-entry signal).
 export async function hasPaymentInputFields(page) {
   const mainUrl = page.url();
   const checkFrame = async (frame) => {
@@ -139,7 +158,10 @@ export async function hasPaymentInputFields(page) {
           const r = el.getBoundingClientRect();
           return r.width > 0 && r.height > 0;
         };
-        const inputs = [...document.querySelectorAll('input, [role=textbox]')].filter(visible);
+        const isTextEntry = (el) => el.tagName === 'TEXTAREA'
+          || el.getAttribute('role') === 'textbox'
+          || (el.tagName === 'INPUT' && !['submit', 'button', 'checkbox', 'radio', 'reset', 'image', 'hidden', 'file'].includes((el.getAttribute('type') || 'text').toLowerCase()));
+        const inputs = [...document.querySelectorAll('input, [role=textbox]')].filter(visible).filter(isTextEntry);
         return inputs.some((el) => {
           const label = [
             el.getAttribute('aria-label') || '',
