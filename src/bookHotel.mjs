@@ -10,7 +10,7 @@ import { mkdirSync, existsSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { replay } from './replay.mjs';
 import { getRecording, saveRecording } from './recordingStore.mjs';
-import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled } from './verify.mjs';
+import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, matchesRequestedHotel, collectFlowText } from './verify.mjs';
 import { logAttempt } from './costLog.mjs';
 
 function buildGoal({ hotelName, checkIn, checkOut, roomType, guests }, { resuming }) {
@@ -119,14 +119,29 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
         if (recording) {
           const replayResult = await replay(page, recording, params);
           if (!replayResult.broken) {
-            const bodyText = await page.evaluate(() => document.body.innerText).catch(() => '');
-            const reallyOnPayment = looksLikePayment(bodyText) && await hasPaymentInputFields(page).catch(() => false);
+            // Same cross-frame text a live Discover run reads (see verify.mjs's collectFlowText) - a
+            // main-frame-only read here would miss a same-page widget's content (Mews-style) on replay even
+            // though the live Discover path already accounts for it.
+            const flowText = await collectFlowText(page).catch(() => '');
+            const reallyOnPayment = looksLikePayment(flowText) && await hasPaymentInputFields(page).catch(() => false);
             const fieldsOk = reallyOnPayment ? await requiredFieldsFilled(page, recording) : { ok: false };
-            result = reallyOnPayment && fieldsOk.ok
+            // A recording is scoped to (hotel, provider) already (see recordingStore.mjs), so a replay
+            // landing on the WRONG hotel should be rare - but a stale profile session or a site's own
+            // nondeterministic search state could still do it, and this check is free once flowText is
+            // already computed. Same defense-in-depth reasoning as the live Discover path.
+            const hotelOk = matchesRequestedHotel(flowText, hotelName);
+            result = reallyOnPayment && fieldsOk.ok && hotelOk
               ? { success: true, why: 'payment', trace: recording, tookMs: 0, costUsd: 0, apiCalls: 0, replayed: true }
-              : { success: false, why: 'stuck', reason: 'replay completed all steps but did not land on a verified payment page', trace: recording };
+              : {
+                success: false,
+                why: 'stuck',
+                reason: !hotelOk && reallyOnPayment && fieldsOk.ok
+                  ? 'replay reached a real payment page, but not for the requested hotel'
+                  : 'replay completed all steps but did not land on a verified payment page',
+                trace: recording,
+              };
           } else {
-            const discovered = await discover(page, { goal: buildGoal(params, { resuming: true }), onStep, maxSteps: MAX_STEPS });
+            const discovered = await discover(page, { goal: buildGoal(params, { resuming: true }), onStep, maxSteps: MAX_STEPS, hotelName });
             if (discovered.success) {
               const merged = [...recording.slice(0, replayResult.brokenAtStep), ...discovered.trace];
               saveRecording(hotelName, provider.name, merged);
@@ -134,7 +149,7 @@ export async function bookHotel({ hotelName, checkIn, checkOut, roomType, guests
             result = { ...discovered, trace: discovered.trace, resumedFromStep: replayResult.brokenAtStep };
           }
         } else {
-          const discovered = await discover(page, { goal: buildGoal(params, { resuming: false }), onStep, maxSteps: MAX_STEPS });
+          const discovered = await discover(page, { goal: buildGoal(params, { resuming: false }), onStep, maxSteps: MAX_STEPS, hotelName });
           if (discovered.success) saveRecording(hotelName, provider.name, discovered.trace);
           result = discovered;
         }

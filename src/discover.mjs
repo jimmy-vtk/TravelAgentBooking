@@ -8,7 +8,7 @@
 // Replay left behind - same loop either way, the goal prompt just says which.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, isRelevantFrame } from './verify.mjs';
+import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, isRelevantFrame, collectFlowText, matchesRequestedHotel } from './verify.mjs';
 
 // Some API keys are "identity-linked" (issued via SSO/org identity) and require an anthropic-workspace-id
 // header telling Anthropic which workspace's billing/quota the request acts in. A plain Console-generated
@@ -485,7 +485,7 @@ export async function executeAction(page, action, elements) {
   }
 }
 
-export async function discover(page0, { goal, maxSteps = 25, onStep } = {}) {
+export async function discover(page0, { goal, maxSteps = 25, onStep, hotelName } = {}) {
   const startedAt = Date.now();
   const history = [];
   const trace = [];
@@ -518,18 +518,11 @@ export async function discover(page0, { goal, maxSteps = 25, onStep } = {}) {
     // lives inside that same secure.agoda.com iframe, not the outer page. Aggregate text across every frame
     // for the payment-text check specifically (bodyText itself stays main-frame-only - it also feeds the
     // cheap no-visible-effect signature below, which doesn't need this).
-    const mainUrl = page.url();
     // Same scoping as hasPaymentInputFields() (see verify.mjs's isRelevantFrame) - live-verified 2026-09 on
     // Agoda, an unrelated third-party ad iframe's text alone was enough to satisfy PAYMENT_WORDS+PRICE_WORDS
     // on the search-results page. Aggregate text only from frames that are actually part of the booking
     // flow, not every ad/tracking iframe the page happens to load.
-    const allFramesText = (
-      await Promise.all(
-        page.frames()
-          .filter((f) => isRelevantFrame(f.url(), mainUrl))
-          .map((f) => f.evaluate(() => document.body?.innerText || '').catch(() => ''))
-      )
-    ).join('\n');
+    const allFramesText = await collectFlowText(page);
     // Text match alone is a false-positive risk (a step breadcrumb can mention "payment"/"Zahlung" as an
     // upcoming step's label without an actual payment form present) - require a real card-shaped input
     // field in the DOM too before treating this as the payment page at all. A real card form is commonly
@@ -542,7 +535,7 @@ export async function discover(page0, { goal, maxSteps = 25, onStep } = {}) {
     if (process.env.DEBUG_PAYMENT_CHECK) {
       console.error(`[payment-check] step=${step} looksLikePayment=${looksLikePayment(allFramesText)} paymentInputsPresent=${paymentInputsPresent} frames=${page.frames().map((f) => f.url()).join(' | ')}`);
       console.error(`[payment-check] allFramesText.length=${allFramesText.length} sample=${JSON.stringify(allFramesText.slice(-300))}`);
-      const relevantUrls = page.frames().filter((f) => isRelevantFrame(f.url(), mainUrl)).map((f) => f.url());
+      const relevantUrls = page.frames().filter((f) => isRelevantFrame(f.url(), page.url())).map((f) => f.url());
       console.error(`[payment-check] relevantFrameUrls=${JSON.stringify(relevantUrls)}`);
     }
     if (looksLikePayment(allFramesText) && !paymentInputsPresent) {
@@ -556,12 +549,21 @@ export async function discover(page0, { goal, maxSteps = 25, onStep } = {}) {
     }
     if (looksLikePayment(allFramesText) && paymentInputsPresent) {
       const fieldsOk = await requiredFieldsFilled(page, trace);
-      if (fieldsOk.ok) {
+      // Every check above only asks "is this A real, validly-filled payment page" - never "is this the
+      // payment page for the hotel we were actually asked to book". A wrong-hotel result (a search/
+      // autocomplete mis-pick) would otherwise satisfy every other signal here and still not be a correct
+      // booking - see verify.mjs's matchesRequestedHotel.
+      const hotelOk = matchesRequestedHotel(allFramesText, hotelName);
+      if (process.env.DEBUG_PAYMENT_CHECK && !hotelOk) {
+        console.error(`[payment-check] step=${step} matchesRequestedHotel=false for hotelName=${JSON.stringify(hotelName)}`);
+      }
+      if (fieldsOk.ok && hotelOk) {
         onStep?.({ step, action: 'stop', reason: 'payment_detected_programmatically' });
         return finish({ success: true, why: 'payment' });
       }
-      // page looks like payment but a required field is empty - not success yet, keep going and let the
-      // model see it (the prompt tells it to notice and go back and fill the gap).
+      // page looks like payment but a required field is empty, invalid, or this isn't even the requested
+      // hotel - not success yet, keep going and let the model see it (the prompt tells it to notice and go
+      // back and fill the gap / re-search).
     }
 
     const elements = await getInteractiveElements(page);

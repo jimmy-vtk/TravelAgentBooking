@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, isRelevantFrame, hasInvalidField } from '../src/verify.mjs';
+import { looksLikePayment, hasPaymentInputFields, requiredFieldsFilled, isRelevantFrame, hasInvalidField, matchesRequestedHotel } from '../src/verify.mjs';
 import { startFixture } from './fixture/server.mjs';
 
 test('looksLikePayment: positive - real payment wording + price', () => {
@@ -18,6 +18,35 @@ test('looksLikePayment: negative - payment wording with no price nearby', () => 
 
 test('looksLikePayment: negative - unrelated page with a stray currency symbol', () => {
   assert.equal(looksLikePayment('This café serves €3 coffee. About us. Contact.'), false);
+});
+
+// GUARDRAIL (colleague review, 2026-09): every check above only ever asks "is this A real, validly-filled
+// payment page" - never "is this THE payment page for the hotel we were actually asked to book". Manually
+// auditing every live proof screenshot on file (Agoda/Traveloka/Mews) found the hotel name was in fact
+// correct in all of them - but that was never enforced by the code, only true by luck. matchesRequestedHotel
+// closes that gap.
+test('matchesRequestedHotel: positive - requested hotel\'s name appears verbatim in the flow text', () => {
+  assert.equal(matchesRequestedHotel('Sofitel Mumbai BKC\nThu, Oct 15 - Sun, Oct 18', 'Sofitel Mumbai BKC'), true);
+});
+
+test('matchesRequestedHotel: negative - a completely different, unrelated hotel', () => {
+  assert.equal(matchesRequestedHotel('Four Points by Sheraton Bali, Seminyak\nCheck-in Thu 15 Oct', 'Sofitel Mumbai BKC'), false);
+});
+
+test('matchesRequestedHotel: positive - tolerates ONE dropped/abbreviated word (a location suffix)', () => {
+  // Real site behavior, live-verified: a property's own displayed name can drop a trailing qualifier
+  // ("BKC") without it being a different hotel at all.
+  assert.equal(matchesRequestedHotel('Welcome to Sofitel Mumbai - Payment details', 'Sofitel Mumbai BKC'), true);
+});
+
+test('matchesRequestedHotel: negative - two different properties must not pass on a shared generic word alone', () => {
+  // "Hotel" and "Mumbai" alone are not enough to conflate two different, actual properties.
+  assert.equal(matchesRequestedHotel('Grand Mumbai Hotel - Payment details', 'Sofitel Mumbai BKC'), false);
+});
+
+test('matchesRequestedHotel: degenerate/empty requested name never blocks (nothing distinctive to check)', () => {
+  assert.equal(matchesRequestedHotel('Some Payment Page', ''), true);
+  assert.equal(matchesRequestedHotel('Some Payment Page', null), true);
 });
 
 test('REGRESSION (found live on Halalbooking, 2026-09): a page whose own breadcrumb mentions "Payment" as an upcoming step must NOT be flagged - looksLikePayment(text) alone is true here, but there is no real payment form', async () => {

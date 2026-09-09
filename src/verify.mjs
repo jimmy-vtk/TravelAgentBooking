@@ -1,7 +1,10 @@
-// Success verification. Two checks, both required:
-//  1. looksLikePayment(text)     - regex/text-match only, no OCR/NLP (per the trial task's own suggestion)
-//  2. requiredFieldsFilled(...)  - reads the DOM's actual field values, not just page text. Reaching a
+// Success verification. Three checks, all required:
+//  1. looksLikePayment(text)       - regex/text-match only, no OCR/NLP (per the trial task's own suggestion)
+//  2. requiredFieldsFilled(...)    - reads the DOM's actual field values, not just page text. Reaching a
 //     payment-looking page with an empty required field is NOT success (client feedback, 2026-09).
+//  3. matchesRequestedHotel(...)   - every check above asks "is this A real payment page", never "is this
+//     THE payment page for the hotel we were actually asked to book" - a genuinely reachable, validly-filled
+//     checkout for the WRONG property would satisfy both checks above and still not be a correct booking.
 
 const PAYMENT_WORDS = /payment|credit card|card number|cvv|cvc|billing address|zahlung|kreditkarte|karte\b|carte de cr[ée]dit|expiry|expiration date/i;
 const PRICE_WORDS = /[€$£]\s?\d|\d[.,]\d{2}\s?(eur|usd|gbp|€|\$|£)|total\b|gesamtbetrag|betrag\b/i;
@@ -9,6 +12,35 @@ const PRICE_WORDS = /[€$£]\s?\d|\d[.,]\d{2}\s?(eur|usd|gbp|€|\$|£)|total\b
 export function looksLikePayment(text) {
   const t = String(text || '');
   return PAYMENT_WORDS.test(t) && PRICE_WORDS.test(t);
+}
+
+// Guards against a real, validly-filled payment page for a DIFFERENT hotel than the one actually requested -
+// e.g. the agent's own search/autocomplete step picked a similarly-named property, or (on a replay) a stale
+// browser-profile session left an old cart from a previous test hotel in place. Word-overlap text-match only
+// (no OCR/NLP), the same constraint looksLikePayment already operates under. Exact string equality would be
+// too brittle - a site's own displayed name can legitimately drop/abbreviate a word (a location suffix, a
+// house-style "Hotel"/"Resort") - but a genuinely wrong hotel does not coincidentally share most of the
+// requested name's own distinguishing words. Common, non-distinguishing words are excluded so two DIFFERENT
+// "X Hotel" properties can't pass purely on the word "hotel" itself.
+const HOTEL_NAME_STOPWORDS = new Set(['hotel', 'resort', 'inn', 'the', 'and', 'by', 'a', 'an', 'of', 'at', 'in', 'on']);
+
+function significantWords(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !HOTEL_NAME_STOPWORDS.has(w));
+}
+
+export function matchesRequestedHotel(text, hotelName) {
+  const words = significantWords(hotelName);
+  if (words.length === 0) return true; // nothing distinctive to check against - don't block on a degenerate name
+  const haystack = String(text || '').toLowerCase();
+  const matched = words.filter((w) => haystack.includes(w));
+  // Most (not necessarily all) of the requested name's own significant words must appear somewhere in the
+  // flow's text - tolerates a single dropped/abbreviated word without also accepting a hotel that merely
+  // shares one incidental word with a completely different property.
+  return matched.length >= Math.max(1, Math.ceil(words.length * 0.6));
 }
 
 // A much stronger signal than page text: does the DOM actually contain a card-shaped INPUT field right
@@ -73,6 +105,22 @@ export function isRelevantFrame(frameUrl, mainUrl) {
   } catch {
     return true; // unparseable (data:, etc.) - can't prove it's irrelevant, so don't skip it
   }
+}
+
+// Shared by discover.mjs's live loop and bookHotel.mjs's replay-success check - both need the SAME
+// cross-frame text (the Mews about:blank-widget case above applies equally to whichever caller is asking).
+// The replay path previously read only page.evaluate()'s main-frame text for its own looksLikePayment
+// check - a narrower, inconsistent scan than the live Discover loop already used, and exactly the kind of
+// gap that would silently hide a same-page iframe's content (hotel name included) from the replay path only.
+export async function collectFlowText(page) {
+  const mainUrl = page.url();
+  return (
+    await Promise.all(
+      page.frames()
+        .filter((f) => isRelevantFrame(f.url(), mainUrl))
+        .map((f) => f.evaluate(() => document.body?.innerText || '').catch(() => ''))
+    )
+  ).join('\n');
 }
 
 // Card entry is almost always embedded in a cross-origin <iframe> for PCI compliance (Stripe, Adyen,
